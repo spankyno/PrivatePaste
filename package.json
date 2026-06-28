@@ -1,0 +1,16 @@
+{
+  "name": "privatepaste",
+  "private": true,
+  "workspaces": ["worker", "frontend"],
+  "scripts": {
+    "dev": "concurrently \"npm run dev -w worker\" \"npm run dev -w frontend\"",
+    "build": "npm run build -w frontend && npm run build -w worker",
+    "deploy": "npm run build && wrangler deploy",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "wrangler d1 migrations apply privatepaste-db",
+    "db:migrate:local": "wrangler d1 migrations apply privatepaste-db --local"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}

@@ -1,0 +1,35 @@
+name = "privatepaste"
+main = "worker/src/index.ts"
+compatibility_date = "2024-12-01"
+compatibility_flags = ["nodejs_compat"]
+
+# Static assets served from frontend build
+[assets]
+directory = "./frontend/dist"
+binding = "ASSETS"
+
+# D1 Database
+[[d1_databases]]
+binding = "DB"
+database_name = "privatepaste-db"
+database_id = "YOUR_D1_DATABASE_ID"
+migrations_dir = "migrations"
+
+# KV for rate limiting counters
+[[kv_namespaces]]
+binding = "RATE_LIMIT_KV"
+id = "YOUR_KV_NAMESPACE_ID"
+
+# Environment variables (set secrets via wrangler secret put)
+[vars]
+ENVIRONMENT = "production"
+AUTH_SECRET = "change-me-to-a-real-secret-32-chars"
+
+# Cron triggers for auto-cleanup
+[[triggers]]
+crons = ["0 * * * *"]    # every hour - cleanup expired pastes
+# crons = ["0 3 * * *"]  # daily at 3am - deep cleanup
+
+[dev]
+port = 8787
+local_protocol = "http"
