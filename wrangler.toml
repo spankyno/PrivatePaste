@@ -12,13 +12,13 @@ binding = "ASSETS"
 [[d1_databases]]
 binding = "DB"
 database_name = "privatepaste-db"
-database_id = "YOUR_D1_DATABASE_ID"
+database_id = "0dcd1e89-23d4-4808-87fd-10d36edf9a6e"
 migrations_dir = "migrations"
 
 # KV for rate limiting counters
 [[kv_namespaces]]
 binding = "RATE_LIMIT_KV"
-id = "YOUR_KV_NAMESPACE_ID"
+id = "a48f8c6c49a04196bcb5bcc485ae547f"
 
 # Environment variables (set secrets via wrangler secret put)
 [vars]
