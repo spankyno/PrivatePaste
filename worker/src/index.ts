@@ -21,7 +21,7 @@ const app = new Hono<{ Bindings: Env }>()
 
 app.use('*', secureHeaders())
 app.use('*', cors({
-  origin: ['http://localhost:5173', 'https://privatepaste.YOUR_SUBDOMAIN.workers.dev'],
+  origin: ['http://localhost:5173', 'https://privatepaste-production.kbo1.workers.dev'],
   allowMethods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
   allowHeaders: ['Content-Type', 'Authorization'],
   credentials: true,
