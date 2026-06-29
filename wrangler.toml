@@ -3,10 +3,13 @@ main = "worker/src/index.ts"
 compatibility_date = "2024-12-01"
 compatibility_flags = ["nodejs_compat"]
 
-# Static assets served from frontend build
+# SPA fix: not_found_handling hace que cualquier ruta sin fichero
+# estático devuelva index.html en lugar de 404, permitiendo que
+# React Router maneje /p/:id, /dashboard, /auth, etc.
 [assets]
 directory = "./frontend/dist"
 binding = "ASSETS"
+not_found_handling = "single-page-application"
 
 # D1 Database
 [[d1_databases]]
@@ -28,13 +31,5 @@ ENVIRONMENT = "production"
 [[triggers]]
 crons = ["0 * * * *"]
 
-# Excluir drizzle-orm del bundle — lo resuelve el runtime de Workers
-[build]
-command = ""
-
-[build.upload]
-format = "modules"
-
-[[rules]]
-type = "ESModule"
-globs = ["**/*.mjs"]
+[env.production]
+name = "privatepaste-production"
