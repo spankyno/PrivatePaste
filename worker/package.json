@@ -3,10 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "wrangler dev --env development",
+    "dev": "wrangler dev",
     "build": "tsc --noEmit",
-    "deploy": "wrangler deploy",
-    "cf-typegen": "wrangler types"
+    "deploy": "wrangler deploy"
   },
   "dependencies": {
     "hono": "^4.6.3",
