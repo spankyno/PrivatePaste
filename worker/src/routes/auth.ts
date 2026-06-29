@@ -10,7 +10,7 @@ export function createAuth(env: Env) {
     secret: env.AUTH_SECRET,
 
     baseURL: env.ENVIRONMENT === 'production'
-      ? 'https://privatepaste.YOUR_SUBDOMAIN.workers.dev'
+      ? 'https://privatepaste-production.kbo1.workers.dev'
       : 'http://localhost:8787',
 
     database: {
