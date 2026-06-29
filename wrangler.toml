@@ -20,16 +20,21 @@ migrations_dir = "migrations"
 binding = "RATE_LIMIT_KV"
 id = "a48f8c6c49a04196bcb5bcc485ae547f"
 
-# Environment variables (set secrets via wrangler secret put)
+# Variables de entorno públicas
 [vars]
 ENVIRONMENT = "production"
-AUTH_SECRET = "change-me-to-a-real-secret-32-chars"
 
-# Cron triggers for auto-cleanup
+# Cron trigger para limpieza automática (cada hora)
 [[triggers]]
-crons = ["0 * * * *"]    # every hour - cleanup expired pastes
-# crons = ["0 3 * * *"]  # daily at 3am - deep cleanup
+crons = ["0 * * * *"]
 
-[dev]
-port = 8787
-local_protocol = "http"
+# Excluir drizzle-orm del bundle — lo resuelve el runtime de Workers
+[build]
+command = ""
+
+[build.upload]
+format = "modules"
+
+[[rules]]
+type = "ESModule"
+globs = ["**/*.mjs"]
