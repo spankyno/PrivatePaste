@@ -1,5 +1,3 @@
-worker/src/index.ts — auth inline, bindings garantizados
-Copiar
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
 import { secureHeaders } from 'hono/secure-headers'
