@@ -9,7 +9,6 @@
   },
   "dependencies": {
     "hono": "^4.6.3",
-    "better-auth": "^1.0.0",
     "drizzle-orm": "^0.36.1",
     "nanoid": "^5.0.7",
     "zod": "^3.23.8"
