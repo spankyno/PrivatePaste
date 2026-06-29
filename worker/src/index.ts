@@ -1,6 +1,3 @@
-/**
- * PrivatePaste — Cloudflare Worker entry point.
- */
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
 import { secureHeaders } from 'hono/secure-headers'
@@ -8,7 +5,7 @@ import { logger } from 'hono/logger'
 import type { Env } from './lib/types'
 import { authMiddleware } from './middleware/auth'
 import { rateLimitMiddleware } from './middleware/rateLimit'
-import { createAuth } from './routes/auth'
+import authRouter from './routes/auth'
 import pastesRouter from './routes/pastes'
 import foldersRouter from './routes/folders'
 import { handleScheduled } from './cron'
@@ -18,7 +15,6 @@ import { eq, sql } from 'drizzle-orm'
 const app = new Hono<{ Bindings: Env }>()
 
 // ─── Global middleware ────────────────────────────────────────────────────────
-
 app.use('*', secureHeaders())
 app.use('*', cors({
   origin: ['http://localhost:5173', 'https://privatepaste-production.kbo1.workers.dev'],
@@ -33,18 +29,14 @@ app.use('/api/*', rateLimitMiddleware)
 // ─── Health check ─────────────────────────────────────────────────────────────
 app.get('/api/health', (c) => c.json({ ok: true, ts: Date.now() }))
 
-// ─── Auth — better-auth maneja todas las rutas /api/auth/* ───────────────────
-// Se monta como handler directo, no como sub-router de Hono
-app.all('/api/auth/*', async (c) => {
-  const auth = createAuth(c.env)
-  return auth.handler(c.req.raw)
-})
+// ─── Auth routes ──────────────────────────────────────────────────────────────
+app.route('/api/auth', authRouter)
 
 // ─── API routes ───────────────────────────────────────────────────────────────
 app.route('/api/pastes',  pastesRouter)
 app.route('/api/folders', foldersRouter)
 
-// ─── /api/me — sesión actual ──────────────────────────────────────────────────
+// ─── /api/me ──────────────────────────────────────────────────────────────────
 app.get('/api/me', (c) => {
   const user = c.get('user')
   if (!user) return c.json({ user: null, tier: 'anon' })
@@ -60,12 +52,12 @@ app.get('/raw/:id', async (c) => {
   const result = await db.select().from(pastes).where(eq(pastes.id, id)).limit(1)
   const paste  = result[0]
 
-  if (!paste)                                   return c.text('Not found', 404)
-  if (paste.expiresAt && paste.expiresAt < now) return c.text('Paste expired', 410)
+  if (!paste)                                    return c.text('Not found', 404)
+  if (paste.expiresAt && paste.expiresAt < now)  return c.text('Paste expired', 410)
   if (paste.visibility === 'private' && paste.userId !== c.get('userId'))
-                                                return c.text('Private paste', 403)
+                                                 return c.text('Private paste', 403)
   if (paste.visibility === 'password' && paste.userId !== c.get('userId'))
-                                                return c.text('Password required — visit the paste URL to unlock', 403)
+                                                 return c.text('Password required', 403)
 
   c.executionCtx.waitUntil(
     db.update(pastes).set({ views: sql`${pastes.views} + 1` }).where(eq(pastes.id, id))
@@ -86,7 +78,6 @@ app.get('*', async (c) => {
   }
 })
 
-// ─── Export ───────────────────────────────────────────────────────────────────
 export default {
   fetch:     app.fetch,
   scheduled: handleScheduled,
