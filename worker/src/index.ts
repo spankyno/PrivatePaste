@@ -8,6 +8,7 @@ import { rateLimitMiddleware } from './middleware/rateLimit'
 import authRouter from './routes/auth'
 import pastesRouter from './routes/pastes'
 import foldersRouter from './routes/folders'
+import { handleScheduled } from './cron'
 
 const app = new Hono<{ Bindings: Env }>()
 
@@ -64,4 +65,4 @@ app.get('*', async (c) => {
   }
 })
 
-export default { fetch: app.fetch }
+export default { fetch: app.fetch, scheduled: handleScheduled }
