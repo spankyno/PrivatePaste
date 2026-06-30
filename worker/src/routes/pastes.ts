@@ -14,21 +14,38 @@ function json(data: unknown, status = 200, headers: Record<string,string> = {}) 
   })
 }
 
+// Convierte una fila de D1 (snake_case) al shape que espera el frontend (camelCase)
+function toCamelPaste(row: any) {
+  return {
+    id:          row.id,
+    userId:      row.user_id ?? null,
+    folderId:    row.folder_id ?? null,
+    title:       row.title,
+    content:     row.content,
+    language:    row.language,
+    visibility:  row.visibility,
+    expiresAt:   row.expires_at ?? null,
+    views:       row.views ?? 0,
+    isArchived:  !!row.is_archived,
+    hasPassword: !!row.password_hash,
+    createdAt:   row.created_at,
+    updatedAt:   row.updated_at,
+  }
+}
+
 async function hashPassword(password: string): Promise<string> {
   const salt = nanoid(16)
   const data = new TextEncoder().encode(salt + password)
   const hash = await crypto.subtle.digest('SHA-256', data)
-  const hex  = Array.from(new Uint8Array(hash)).map(b => b.toString(16).padStart(2,'0')).join('')
-  return `${salt}:${hex}`
+  return `${salt}:${Array.from(new Uint8Array(hash)).map(b => b.toString(16).padStart(2,'0')).join('')}`
 }
 
 async function verifyPassword(password: string, stored: string): Promise<boolean> {
   const [salt, hash] = stored.split(':')
   if (!salt || !hash) return false
-  const data    = new TextEncoder().encode(salt + password)
+  const data = new TextEncoder().encode(salt + password)
   const newHash = await crypto.subtle.digest('SHA-256', data)
-  const hex     = Array.from(new Uint8Array(newHash)).map(b => b.toString(16).padStart(2,'0')).join('')
-  return hex === hash
+  return Array.from(new Uint8Array(newHash)).map(b => b.toString(16).padStart(2,'0')).join('') === hash
 }
 
 const CreateSchema = z.object({
@@ -121,20 +138,17 @@ router.get('/', requireAuth, async (c) => {
       ).bind(q, userId, limit, offset).all()
       rows = fts.results
     } else {
-      const base = folderId
+      const result = folderId
         ? await c.env.DB.prepare(
             'SELECT * FROM pastes WHERE user_id = ? AND folder_id = ? ORDER BY created_at DESC LIMIT ? OFFSET ?'
           ).bind(userId, folderId, limit, offset).all()
         : await c.env.DB.prepare(
             'SELECT * FROM pastes WHERE user_id = ? ORDER BY created_at DESC LIMIT ? OFFSET ?'
           ).bind(userId, limit, offset).all()
-      rows = base.results
+      rows = result.results
     }
 
-    const pastes = rows.map(({ password_hash, ip_address, ...p }) => ({
-      ...p, hasPassword: !!password_hash
-    }))
-    return json({ pastes, page, limit })
+    return json({ pastes: rows.map(toCamelPaste), page, limit })
   } catch (err) {
     console.error('[GET /pastes]', err)
     return json({ error: String(err) }, 500)
@@ -148,24 +162,21 @@ router.get('/:id', async (c) => {
     const now    = Math.floor(Date.now() / 1000)
     const userId = c.get('userId')
 
-    const paste = await c.env.DB.prepare(
-      'SELECT * FROM pastes WHERE id = ?'
-    ).bind(id).first<any>()
+    const paste = await c.env.DB.prepare('SELECT * FROM pastes WHERE id = ?').bind(id).first<any>()
 
     if (!paste) return json({ error: 'Paste not found' }, 404)
     if (paste.expires_at && paste.expires_at < now) return json({ error: 'Paste has expired' }, 410)
     if (paste.visibility === 'private' && paste.user_id !== userId)
       return json({ error: 'This paste is private' }, 403)
     if (paste.visibility === 'password' && paste.user_id !== userId) {
-      const { password_hash, ip_address, content, ...safe } = paste
-      return json({ ...safe, hasPassword: true, locked: true })
+      const safe = toCamelPaste(paste)
+      return json({ ...safe, content: undefined, locked: true })
     }
 
     c.executionCtx.waitUntil(
       c.env.DB.prepare('UPDATE pastes SET views = views + 1 WHERE id = ?').bind(id).run()
     )
-    const { password_hash, ip_address, ...safe } = paste
-    return json({ ...safe, hasPassword: !!password_hash })
+    return json(toCamelPaste(paste))
   } catch (err) {
     console.error('[GET /pastes/:id]', err)
     return json({ error: String(err) }, 500)
@@ -175,9 +186,9 @@ router.get('/:id', async (c) => {
 // POST /api/pastes/:id/unlock
 router.post('/:id/unlock', async (c) => {
   try {
-    const { id }      = c.req.param()
+    const { id }       = c.req.param()
     const { password } = await c.req.json<{ password: string }>()
-    const now         = Math.floor(Date.now() / 1000)
+    const now          = Math.floor(Date.now() / 1000)
 
     const paste = await c.env.DB.prepare('SELECT * FROM pastes WHERE id = ?').bind(id).first<any>()
     if (!paste)                                     return json({ error: 'Not found' }, 404)
@@ -191,8 +202,7 @@ router.post('/:id/unlock', async (c) => {
     c.executionCtx.waitUntil(
       c.env.DB.prepare('UPDATE pastes SET views = views + 1 WHERE id = ?').bind(id).run()
     )
-    const { password_hash, ip_address, ...safe } = paste
-    return json({ ...safe, hasPassword: true })
+    return json(toCamelPaste(paste))
   } catch (err) {
     return json({ error: String(err) }, 500)
   }
