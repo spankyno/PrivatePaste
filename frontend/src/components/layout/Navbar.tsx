@@ -29,9 +29,12 @@ export function Navbar() {
     <header className="sticky top-0 z-50 border-b border-[var(--border)] bg-[var(--bg)]/90 backdrop-blur-sm">
       <nav className="max-w-6xl mx-auto px-4 h-14 flex items-center gap-4">
         {/* Logo */}
-        <Link to="/" className="flex items-center gap-2 font-semibold text-[var(--text)] hover:opacity-80 transition-opacity mr-2">
-          <FileCode2 className="w-5 h-5 text-brand-600 dark:text-brand-400" />
-          <span className="hidden sm:inline">PrivatePaste</span>
+        <Link
+        to={user ? '/dashboard' : '/'}
+        className="flex items-center gap-2 font-semibold text-[var(--text)] hover:opacity-80 transition-opacity mr-2"
+        >
+        <FileCode2 className="w-5 h-5 text-brand-600 dark:text-brand-400" />
+        <span className="hidden sm:inline">PrivatePaste</span>
         </Link>
 
         {/* New paste button */}
