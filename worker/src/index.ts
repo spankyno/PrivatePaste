@@ -13,7 +13,7 @@ import { handleScheduled } from './cron'
 const app = new Hono<{ Bindings: Env }>()
 
 // ⚠ Sustituye con tu URL real del Worker tras el primer deploy
-const PRODUCTION_URL = 'https://privatepaste-production.YOUR_SUBDOMAIN.workers.dev'
+const PRODUCTION_URL = 'https://privatepaste-production.kbo1.workers.dev'
 
 // ─── Middleware global ────────────────────────────────────────────────────────
 app.use('*', secureHeaders())
