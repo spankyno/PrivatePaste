@@ -2,7 +2,7 @@
 
 A modern, private, edge-deployed Pastebin alternative built on Cloudflare Workers.
 
-## Stack
+## Stack 
 
 | Layer | Technology |
 |---|---|
