@@ -62,8 +62,20 @@ body {
 .cm-editor.cm-focused { outline: 2px solid var(--brand) !important; outline-offset: -2px; }
 .cm-scroller { overflow: auto; }
 
-/* Light editor theme */
-.cm-editor:not(.dark *) .cm-content { background: var(--editor-bg); }
+/* Fondo del editor en modo claro — el oneDark theme ya gestiona su propio
+   fondo en modo oscuro, así que solo forzamos esto cuando NO hay clase .dark
+   en el html, evitando el selector roto :not(.dark *) */
+html:not(.dark) .cm-editor .cm-content,
+html:not(.dark) .cm-editor .cm-gutters {
+  background-color: var(--editor-bg);
+}
+
+/* En modo oscuro, asegurar que el wrapper exterior también herede el fondo
+   correcto incluso antes de que el theme oneDark termine de aplicar estilos,
+   evitando el flash de fondo blanco */
+html.dark .cm-editor {
+  background-color: #282c34; /* mismo fondo base que usa oneDark */
+}
 
 /* ─── Scrollbar styling ─────────────────────────────────────────────────────── */
 ::-webkit-scrollbar { width: 6px; height: 6px; }
