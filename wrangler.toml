@@ -1,4 +1,4 @@
-name = "privatepaste"
+name = "privatepaste-production"
 main = "worker/src/index.ts"
 compatibility_date = "2024-12-01"
 compatibility_flags = ["nodejs_compat"]
@@ -30,6 +30,3 @@ ENVIRONMENT = "production"
 # Cron trigger para limpieza automática (cada hora)
 [[triggers]]
 crons = ["0 * * * *"]
-
-[env.production]
-name = "privatepaste-production"
