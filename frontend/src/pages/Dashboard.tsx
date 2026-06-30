@@ -3,7 +3,7 @@
  */
 import { useEffect, useState, useCallback } from 'react'
 import { Link, Navigate } from 'react-router-dom'
-import { Search, Folder, FileText, Trash2, ExternalLink, Eye, Clock, Lock, Globe, EyeOff, Plus, Loader2 } from 'lucide-react'
+import { Search, Folder, FileText, Trash2, ExternalLink, Eye, Clock, Lock, Globe, EyeOff, Plus, Loader2, Copy, Check } from 'lucide-react'
 import { useAuth } from '@/hooks/useAuth'
 import { api, type Paste, type Folder as FolderType } from '@/lib/api'
 import { formatDistanceToNow, fromUnixTime } from 'date-fns'
@@ -18,7 +18,15 @@ export function DashboardPage() {
   const [page,     setPage]     = useState(1)
   const [loading,  setLoading]  = useState(true)
   const [deleting, setDeleting] = useState<string | null>(null)
-
+  const [copiedId, setCopiedId] = useState<string | null>(null)
+  const handleCopy = async (id: string, e: React.MouseEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    const url = `${window.location.origin}/p/${id}`
+    await navigator.clipboard.writeText(url)
+    setCopiedId(id)
+    setTimeout(() => setCopiedId(null), 2000)
+  }
   const fetchPastes = useCallback(async () => {
     setLoading(true)
     try {
@@ -167,6 +175,15 @@ export function DashboardPage() {
                     </div>
 
                     <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <button
+                        onClick={e => handleCopy(paste.id, e)}
+                        className="btn-ghost p-1.5 rounded-md"
+                        title="Copy URL"
+                      >
+                        {copiedId === paste.id
+                          ? <Check className="w-3.5 h-3.5 text-green-500" />
+                          : <Copy  className="w-3.5 h-3.5" />}
+                      </button>
                       <a
                         href={`/p/${paste.id}`}
                         target="_blank"
