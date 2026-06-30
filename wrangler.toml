@@ -3,30 +3,30 @@ main = "worker/src/index.ts"
 compatibility_date = "2024-12-01"
 compatibility_flags = ["nodejs_compat"]
 
-# SPA fix: not_found_handling hace que cualquier ruta sin fichero
-# estático devuelva index.html en lugar de 404, permitiendo que
-# React Router maneje /p/:id, /dashboard, /auth, etc.
+# SPA fix: sirve index.html para rutas sin fichero estático (React Router)
 [assets]
 directory = "./frontend/dist"
 binding = "ASSETS"
 not_found_handling = "single-page-application"
 
 # D1 Database
+# ⚠ Sustituye con tu Database ID real
 [[d1_databases]]
 binding = "DB"
 database_name = "privatepaste-db"
-database_id = "0dcd1e89-23d4-4808-87fd-10d36edf9a6e"
+database_id = "YOUR_D1_DATABASE_ID"
 migrations_dir = "migrations"
 
-# KV for rate limiting counters
+# KV para rate limiting
+# ⚠ Sustituye con tu KV Namespace ID real
 [[kv_namespaces]]
 binding = "RATE_LIMIT_KV"
-id = "a48f8c6c49a04196bcb5bcc485ae547f"
+id = "YOUR_KV_NAMESPACE_ID"
 
-# Variables de entorno públicas
+# Variables públicas
 [vars]
 ENVIRONMENT = "production"
 
-# Cron trigger para limpieza automática (cada hora)
+# Cron: limpieza automática cada hora
 [[triggers]]
 crons = ["0 * * * *"]
