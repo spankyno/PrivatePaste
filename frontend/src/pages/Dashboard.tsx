@@ -1,12 +1,12 @@
 /**
- * Dashboard — lista de pastes con búsqueda, carpetas y borrado.
+ * Dashboard — lista de pastes con búsqueda, carpetas, drag & drop y borrado.
  */
 import { useEffect, useState, useCallback, useRef } from 'react'
 import { Link, Navigate } from 'react-router-dom'
 import {
   Search, FileText, Trash2, ExternalLink, Eye, Clock, Lock, Globe, EyeOff,
   Plus, Loader2, Copy, Check, Folder as FolderIcon, FolderPlus, Pencil,
-  X, FolderInput,
+  X, FolderInput, GripVertical,
 } from 'lucide-react'
 import { useAuth } from '@/hooks/useAuth'
 import { api, type Paste, type Folder as FolderType } from '@/lib/api'
@@ -34,6 +34,10 @@ export function DashboardPage() {
 
   const [moveMenuFor, setMoveMenuFor] = useState<string | null>(null)
   const moveMenuRef = useRef<HTMLDivElement>(null)
+
+  // Drag & drop state
+  const [draggingId,  setDraggingId]  = useState<string | null>(null)
+  const [dragOverId,  setDragOverId]  = useState<string | null>(null) // 'root' o folder.id
 
   const canUseFolders = tier === 'registered' || tier === 'pro'
 
@@ -82,15 +86,70 @@ export function DashboardPage() {
     setTimeout(() => setCopiedId(null), 2000)
   }
 
+  /**
+   * Mueve un paste a una carpeta (o a null = sin carpeta).
+   * Si la vista actual está filtrada por carpeta y el destino es distinto,
+   * el paste se elimina del array local — esto arregla el bug de que
+   * el paste seguía visible en la carpeta origen tras moverlo.
+   */
+  const movePasteToFolder = async (pasteId: string, targetFolderId: string | null) => {
+    try {
+      await api.updatePaste(pasteId, { folderId: targetFolderId })
+      setPastes(ps => {
+        // Si estamos viendo "All pastes" (folderId === undefined), solo actualizamos el campo
+        if (folderId === undefined) {
+          return ps.map(p => p.id === pasteId ? { ...p, folderId: targetFolderId } : p)
+        }
+        // Si estamos dentro de una carpeta concreta y el destino es otra carpeta
+        // (o ninguna), el paste ya no pertenece a esta vista — lo quitamos.
+        if (targetFolderId !== folderId) {
+          return ps.filter(p => p.id !== pasteId)
+        }
+        return ps
+      })
+    } catch { /* ignore */ }
+  }
+
   const handleMoveToFolder = async (pasteId: string, targetFolderId: string | null, e: React.MouseEvent) => {
     e.preventDefault()
     e.stopPropagation()
-    try {
-      await api.updatePaste(pasteId, { folderId: targetFolderId })
-      setPastes(ps => ps.map(p => p.id === pasteId ? { ...p, folderId: targetFolderId } : p))
-    } catch { /* ignore */ }
+    await movePasteToFolder(pasteId, targetFolderId)
     setMoveMenuFor(null)
   }
+
+  // ─── Drag & drop handlers ─────────────────────────────────────────────────
+
+  const handleDragStart = (pasteId: string) => (e: React.DragEvent) => {
+    setDraggingId(pasteId)
+    e.dataTransfer.effectAllowed = 'move'
+    e.dataTransfer.setData('text/plain', pasteId)
+  }
+
+  const handleDragEnd = () => {
+    setDraggingId(null)
+    setDragOverId(null)
+  }
+
+  const handleDragOverFolder = (targetId: string) => (e: React.DragEvent) => {
+    e.preventDefault()
+    e.dataTransfer.dropEffect = 'move'
+    setDragOverId(targetId)
+  }
+
+  const handleDragLeaveFolder = () => {
+    setDragOverId(null)
+  }
+
+  const handleDropOnFolder = (targetFolderId: string | null) => async (e: React.DragEvent) => {
+    e.preventDefault()
+    const pasteId = e.dataTransfer.getData('text/plain') || draggingId
+    setDragOverId(null)
+    setDraggingId(null)
+    if (!pasteId) return
+    await movePasteToFolder(pasteId, targetFolderId)
+  }
+
+  // ─── Folder modal handlers ────────────────────────────────────────────────
 
   const openCreateFolder = () => {
     setEditingFolder(null)
@@ -155,6 +214,7 @@ export function DashboardPage() {
           <h1 className="text-xl font-semibold">My pastes</h1>
           <p className="text-sm text-[var(--text-muted)] mt-0.5">
             {tier === 'pro' ? 'Pro' : 'Free'} account · {pastes.length} paste{pastes.length !== 1 ? 's' : ''} shown
+            {canUseFolders && <span className="hidden sm:inline"> · drag a paste onto a folder to move it</span>}
           </p>
         </div>
         <Link to="/" className="btn-primary text-sm">
@@ -176,11 +236,16 @@ export function DashboardPage() {
               )}
             </div>
 
+            {/* "All pastes" — también es drop target para sacar de cualquier carpeta */}
             <button
               onClick={() => setFolderId(undefined)}
+              onDragOver={canUseFolders ? handleDragOverFolder('root') : undefined}
+              onDragLeave={canUseFolders ? handleDragLeaveFolder : undefined}
+              onDrop={canUseFolders ? handleDropOnFolder(null) : undefined}
               className={clsx(
                 'flex items-center gap-2 px-2 py-1.5 rounded-md text-sm transition-colors text-left',
-                !folderId ? 'bg-brand-600/10 text-brand-600 dark:bg-brand-500/10 dark:text-brand-400' : 'text-[var(--text-muted)] hover:bg-[var(--bg-tertiary)]'
+                !folderId ? 'bg-brand-600/10 text-brand-600 dark:bg-brand-500/10 dark:text-brand-400' : 'text-[var(--text-muted)] hover:bg-[var(--bg-tertiary)]',
+                dragOverId === 'root' && 'ring-2 ring-brand-500 bg-brand-600/10'
               )}
             >
               <FileText className="w-4 h-4" />
@@ -190,11 +255,15 @@ export function DashboardPage() {
             {folders.map(f => (
               <div
                 key={f.id}
+                onClick={() => setFolderId(folderId === f.id ? undefined : f.id)}
+                onDragOver={canUseFolders ? handleDragOverFolder(f.id) : undefined}
+                onDragLeave={canUseFolders ? handleDragLeaveFolder : undefined}
+                onDrop={canUseFolders ? handleDropOnFolder(f.id) : undefined}
                 className={clsx(
                   'group flex items-center gap-2 px-2 py-1.5 rounded-md text-sm transition-colors cursor-pointer',
-                  folderId === f.id ? 'bg-brand-600/10 text-brand-600 dark:bg-brand-500/10 dark:text-brand-400' : 'text-[var(--text-muted)] hover:bg-[var(--bg-tertiary)]'
+                  folderId === f.id ? 'bg-brand-600/10 text-brand-600 dark:bg-brand-500/10 dark:text-brand-400' : 'text-[var(--text-muted)] hover:bg-[var(--bg-tertiary)]',
+                  dragOverId === f.id && 'ring-2 ring-brand-500 bg-brand-600/10 scale-[1.02]'
                 )}
-                onClick={() => setFolderId(folderId === f.id ? undefined : f.id)}
               >
                 <div className="w-3 h-3 rounded-sm flex-shrink-0" style={{ background: f.color }} />
                 <span className="truncate flex-1">{f.name}</span>
@@ -261,9 +330,19 @@ export function DashboardPage() {
                 <Link
                   key={paste.id}
                   to={`/p/${paste.id}`}
-                  className="card p-4 hover:border-[var(--border-strong)] transition-colors group relative"
+                  draggable={canUseFolders}
+                  onDragStart={canUseFolders ? handleDragStart(paste.id) : undefined}
+                  onDragEnd={canUseFolders ? handleDragEnd : undefined}
+                  className={clsx(
+                    'card p-4 hover:border-[var(--border-strong)] transition-colors group relative',
+                    draggingId === paste.id && 'opacity-40',
+                    canUseFolders && 'cursor-grab active:cursor-grabbing'
+                  )}
                 >
                   <div className="flex items-start gap-3">
+                    {canUseFolders && (
+                      <GripVertical className="w-4 h-4 text-[var(--text-faint)] mt-0.5 flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity" />
+                    )}
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2">
                         {visIcon(paste.visibility)}
