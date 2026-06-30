@@ -21,7 +21,7 @@ migrations_dir = "migrations"
 # ⚠ Sustituye con tu KV Namespace ID real
 [[kv_namespaces]]
 binding = "RATE_LIMIT_KV"
-id = "YOUR_KV_NAMESPACE_ID"
+id = "a48f8c6c49a04196bcb5bcc485ae547f"
 
 # Variables públicas
 [vars]
