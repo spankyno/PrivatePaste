@@ -14,7 +14,7 @@ not_found_handling = "single-page-application"
 [[d1_databases]]
 binding = "DB"
 database_name = "privatepaste-db"
-database_id = "YOUR_D1_DATABASE_ID"
+database_id = "0dcd1e89-23d4-4808-87fd-10d36edf9a6e"
 migrations_dir = "migrations"
 
 # KV para rate limiting
