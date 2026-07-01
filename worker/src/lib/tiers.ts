@@ -49,13 +49,15 @@ export const TIER_LIMITS = {
   },
 }
 
-export function roleToTier(role) {
+export function roleToTier(role: string | null | undefined): Tier {
   if (!role) return 'anon'
   if (role === 'pro' || role === 'admin') return 'pro'
   return 'registered'
 }
 
-export const EXPIRY_OPTIONS = [
+export type ExpiryValue = '1h' | '3d' | '30d' | '90d' | '300d' | 'never'
+
+export const EXPIRY_OPTIONS: { label: string; value: ExpiryValue; days: number }[] = [
   { label: '1 hour',   value: '1h',    days: 1 / 24 },
   { label: '3 days',   value: '3d',    days: 3 },
   { label: '30 days',  value: '30d',   days: 30 },
@@ -64,7 +66,7 @@ export const EXPIRY_OPTIONS = [
   { label: 'Never',    value: 'never', days: 0 },
 ]
 
-export function expiryToTimestamp(value) {
+export function expiryToTimestamp(value: ExpiryValue): number | null {
   const opt = EXPIRY_OPTIONS.find(o => o.value === value)
   if (!opt || opt.days === 0) return null
   return Math.floor(Date.now() / 1000) + Math.floor(opt.days * 86400)
