@@ -4,6 +4,22 @@
 
 export type Tier = 'anon' | 'registered' | 'pro'
 
+// Duración de la cuenta PRO: 1 año (365 días) desde users.updated_at.
+// updated_at se actualiza manualmente al recibir el pago (marca el inicio
+// del periodo PRO); no se persiste una columna aparte de expiración
+// porque es un cálculo determinista a partir de ese timestamp.
+export const PRO_DURATION_SECONDS = 365 * 86400
+
+/** Timestamp unix en el que expira el PRO de una cuenta cuyo periodo empezó en `since`. */
+export function getProExpiresAt(since: number): number {
+  return since + PRO_DURATION_SECONDS
+}
+
+/** true si una cuenta con role='pro' cuyo periodo empezó en `since` ya debería haber caducado. */
+export function isProExpired(since: number, now: number = Math.floor(Date.now() / 1000)): boolean {
+  return getProExpiresAt(since) < now
+}
+
 export const TIER_LIMITS = {
   anon: {
     maxActivePastes:   10,
