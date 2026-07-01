@@ -89,7 +89,7 @@ router.post('/', pasteCreationRateLimit, async (c) => {
 
     const id        = nanoid(8)
     const now       = Math.floor(Date.now() / 1000)
-    const expiresAt = expiryToTimestamp(body.expiry as any)
+    const expiresAt = expiryToTimestamp(body.expiry)
 
     await c.env.DB.prepare(`
       INSERT INTO pastes
