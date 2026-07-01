@@ -80,3 +80,60 @@ export async function pasteCreationRateLimit(
 
   return next()
 }
+
+// ─── Rate limiting específico para autenticación ─────────────────────────────
+// El límite global de rateLimitMiddleware (200 req/día para anónimos) es
+// demasiado laxo para frenar fuerza bruta sobre login/registro: comparte
+// cupo con el resto del tráfico y no tiene ventana corta. Este middleware
+// añade dos capas independientes, ambas sobre la misma KV, sin dependencias
+// nuevas:
+//   1. Por IP: máx. AUTH_WINDOW_LIMIT intentos por AUTH_WINDOW_MINUTES.
+//      Frena a un atacante que prueba muchas contraseñas/emails desde la
+//      misma IP.
+//   2. Por email objetivo: máx. AUTH_EMAIL_LIMIT intentos por la misma
+//      ventana, independientemente de la IP de origen. Frena el credential
+//      stuffing distribuido (rotación de IPs/proxies) contra una cuenta
+//      concreta.
+const AUTH_WINDOW_MINUTES = 15
+const AUTH_WINDOW_MS      = AUTH_WINDOW_MINUTES * 60 * 1000
+const AUTH_WINDOW_TTL     = AUTH_WINDOW_MINUTES * 60
+const AUTH_IP_LIMIT       = 15
+const AUTH_EMAIL_LIMIT    = 6
+
+export async function authRateLimit(
+  c: Context<{ Bindings: Env }>,
+  next: Next,
+) {
+  try {
+    const kv  = c.env.RATE_LIMIT_KV
+    const ip  = c.req.header('CF-Connecting-IP') ?? 'unknown'
+    const win = Math.floor(Date.now() / AUTH_WINDOW_MS)
+
+    const ipCount = await inc(kv, `rl:auth:ip:${ip}:${win}`, AUTH_WINDOW_TTL)
+    if (ipCount > AUTH_IP_LIMIT) {
+      return c.json({ error: 'Too many attempts. Please try again later.' }, 429)
+    }
+
+    // c.req.json() está cacheado por Hono, así que leerlo aquí no supone
+    // un segundo parseo cuando el handler de la ruta también lo lea.
+    let email: string | undefined
+    try {
+      const body = await c.req.json<{ email?: string }>()
+      if (typeof body?.email === 'string') email = body.email.trim().toLowerCase()
+    } catch {
+      // Body ausente o no-JSON: se deja pasar, el handler de la ruta
+      // devolverá el 400 correspondiente.
+    }
+
+    if (email) {
+      const emailCount = await inc(kv, `rl:auth:email:${email}:${win}`, AUTH_WINDOW_TTL)
+      if (emailCount > AUTH_EMAIL_LIMIT) {
+        return c.json({ error: 'Too many attempts for this account. Please try again later.' }, 429)
+      }
+    }
+  } catch (err) {
+    console.error('[authRateLimit]', err)
+  }
+
+  return next()
+}
