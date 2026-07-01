@@ -4,14 +4,14 @@ import { secureHeaders } from 'hono/secure-headers'
 import { logger } from 'hono/logger'
 import { nanoid } from 'nanoid'
 import type { Env } from './lib/types'
-import { authMiddleware } from './middleware/auth'
-import { rateLimitMiddleware } from './middleware/rateLimit'
+import { authMiddleware, requireAuth } from './middleware/auth'
+import { rateLimitMiddleware, authRateLimit } from './middleware/rateLimit'
 import pastesRouter from './routes/pastes'
 import foldersRouter from './routes/folders'
 import { handleScheduled } from './cron'
 import { hashPassword, verifyPassword, needsRehash } from './lib/password'
+import { getProExpiresAt } from './lib/tiers'
 import { errorResponse } from './lib/http'
-import { authRateLimit } from './middleware/rateLimit'
 
 const app = new Hono<{ Bindings: Env }>()
 
@@ -24,7 +24,25 @@ const PRODUCTION_URL = 'https://privatepaste-production.kbo1.workers.dev'
 app.onError((err, c) => errorResponse(c, 'Internal server error', err, 500))
 
 // ─── Middleware global ────────────────────────────────────────────────────────
-app.use('*', secureHeaders())
+// CSP explícita (secureHeaders() no la activa por defecto). Ajustada al
+// frontend real: SPA servida desde el propio Worker (mismo origen), fuente
+// Google Fonts vía @import en index.css, sin scripts/estilos de terceros
+// ni iframes.
+app.use('*', secureHeaders({
+  contentSecurityPolicy: {
+    defaultSrc:     ["'self'"],
+    scriptSrc:      ["'self'"],
+    styleSrc:       ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
+    fontSrc:        ["'self'", 'https://fonts.gstatic.com'],
+    imgSrc:         ["'self'", 'data:'],
+    connectSrc:     ["'self'"],
+    objectSrc:      ["'none'"],
+    baseUri:        ["'self'"],
+    formAction:     ["'self'"],
+    frameAncestors: ["'none'"],
+    upgradeInsecureRequests: [],
+  },
+}))
 app.use('*', cors({
   origin: ['http://localhost:5173', PRODUCTION_URL],
   allowMethods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
@@ -151,6 +169,54 @@ app.post('/api/auth/sign-out', async (c) => {
   return jsonRes({ success: true }, 200, { 'Set-Cookie': setCookie('', true) })
 })
 
+// ─── POST /api/auth/change-password ───────────────────────────────────────────
+// Requiere sesión activa + contraseña actual. Tras el cambio, revoca todas
+// las demás sesiones del usuario (otros dispositivos/navegadores/tokens
+// robados) para que dejen de ser válidas de inmediato; solo la sesión
+// actual (con la que se hizo la petición) se mantiene viva.
+app.post('/api/auth/change-password', requireAuth, authRateLimit, async (c) => {
+  try {
+    const userId = c.get('userId')!
+    const body = await c.req.json<{ currentPassword: string; newPassword: string }>()
+
+    if (!body.currentPassword || !body.newPassword)
+      return jsonRes({ error: 'Current and new password are required' }, 400)
+    if (body.newPassword.length < 8)
+      return jsonRes({ error: 'New password must be at least 8 characters' }, 400)
+
+    const db  = c.env.DB
+    const now = Math.floor(Date.now() / 1000)
+
+    const account = await db.prepare(
+      'SELECT password FROM accounts WHERE user_id = ? AND provider_id = ?'
+    ).bind(userId, 'email').first<{ password: string }>()
+    if (!account?.password) return jsonRes({ error: 'Invalid current password' }, 401)
+
+    if (!await verifyPassword(body.currentPassword, account.password))
+      return jsonRes({ error: 'Invalid current password' }, 401)
+
+    await db.prepare(
+      'UPDATE accounts SET password = ?, updated_at = ? WHERE user_id = ? AND provider_id = ?'
+    ).bind(await hashPassword(body.newPassword), now, userId, 'email').run()
+
+    // Revoca todas las sesiones salvo la actual: cualquier token robado o
+    // sesión abierta en otro dispositivo antes del cambio deja de servir.
+    const currentToken = (c.req.header('Cookie') ?? '')
+      .match(/(?:^|;\s*)pp_session=([^;]+)/)?.[1]
+
+    if (currentToken) {
+      await db.prepare('DELETE FROM sessions WHERE user_id = ? AND token != ?')
+        .bind(userId, currentToken).run()
+    } else {
+      await db.prepare('DELETE FROM sessions WHERE user_id = ?').bind(userId).run()
+    }
+
+    return jsonRes({ success: true })
+  } catch (err) {
+    return errorResponse(c, 'Failed to change password', err)
+  }
+})
+
 // ─── GET /api/auth/session ────────────────────────────────────────────────────
 app.get('/api/auth/session', async (c) => {
   const cookie = c.req.header('Cookie') ?? ''
@@ -159,7 +225,7 @@ app.get('/api/auth/session', async (c) => {
 
   const now = Math.floor(Date.now() / 1000)
   const row = await c.env.DB.prepare(`
-    SELECT s.id as sid, s.expires_at, u.id, u.email, u.name, u.role
+    SELECT s.id as sid, s.expires_at, u.id, u.email, u.name, u.role, u.updated_at
     FROM sessions s JOIN users u ON u.id = s.user_id
     WHERE s.token = ? LIMIT 1
   `).bind(token).first<any>()
@@ -167,7 +233,10 @@ app.get('/api/auth/session', async (c) => {
   if (!row || row.expires_at < now) return jsonRes({ session: null, user: null })
   return jsonRes({
     session: { id: row.sid, expiresAt: row.expires_at },
-    user:    { id: row.id, email: row.email, name: row.name, role: row.role },
+    user:    {
+      id: row.id, email: row.email, name: row.name, role: row.role,
+      proExpiresAt: row.role === 'pro' ? getProExpiresAt(row.updated_at) : null,
+    },
   })
 })
 

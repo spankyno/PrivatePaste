@@ -1,4 +1,5 @@
 import type { Env } from './lib/types'
+import { PRO_DURATION_SECONDS } from './lib/tiers'
 
 export async function handleScheduled(_event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
   ctx.waitUntil(runCleanup(env))
@@ -7,6 +8,18 @@ export async function handleScheduled(_event: ScheduledEvent, env: Env, ctx: Exe
 async function runCleanup(env: Env) {
   const now          = Math.floor(Date.now() / 1000)
   const sevenDaysAgo = now - 7 * 86400
+  const proCutoff    = now - PRO_DURATION_SECONDS
+
+  // Downgrade de cuentas PRO caducadas (1 año desde updated_at, que se
+  // actualiza manualmente al recibir el pago) a 'registered'. No afecta
+  // a 'admin'. Se ejecuta cada hora (mismo trigger cron que la limpieza
+  // de pastes), así que el desfase máximo entre la caducidad real y el
+  // downgrade efectivo es de ~1h.
+  const downgraded = await env.DB.prepare(`
+    UPDATE users SET role = 'registered', updated_at = ?
+    WHERE role = 'pro' AND updated_at < ?
+  `).bind(now, proCutoff).run()
+  console.log(`[cron] downgraded ${downgraded.meta.changes} expired PRO accounts`)
 
   const deleted = await env.DB.prepare(`
     DELETE FROM pastes
