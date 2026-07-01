@@ -10,7 +10,7 @@ import {
 } from 'lucide-react'
 import { useAuth } from '@/hooks/useAuth'
 import { api, type Paste, type Folder as FolderType } from '@/lib/api'
-import { formatDistanceToNow, fromUnixTime } from 'date-fns'
+import { formatDistanceToNow, fromUnixTime, format } from 'date-fns'
 import clsx from 'clsx'
 
 const FOLDER_COLORS = ['#6366f1', '#ec4899', '#f59e0b', '#10b981', '#3b82f6', '#8b5cf6', '#ef4444', '#14b8a6']
@@ -214,6 +214,9 @@ export function DashboardPage() {
           <h1 className="text-xl font-semibold">My pastes</h1>
           <p className="text-sm text-[var(--text-muted)] mt-0.5">
             {tier === 'pro' ? 'Pro' : 'Free'} account · {pastes.length} paste{pastes.length !== 1 ? 's' : ''} shown
+            {tier === 'pro' && user.proExpiresAt && (
+              <> · Pro expires {format(fromUnixTime(user.proExpiresAt), 'PP')}</>
+            )}
             {canUseFolders && <span className="hidden sm:inline"> · drag a paste onto a folder to move it</span>}
           </p>
         </div>
