@@ -1,10 +1,12 @@
 import { BrowserRouter, Routes, Route } from 'react-router-dom'
 import { AuthProvider } from '@/hooks/useAuth'
 import { Navbar } from '@/components/layout/Navbar'
+import { Footer } from '@/components/layout/Footer'
 import { CreatePastePage } from '@/pages/CreatePaste'
 import { ViewPastePage }   from '@/pages/ViewPaste'
 import { AuthPage }        from '@/pages/Auth'
 import { DashboardPage }   from '@/pages/Dashboard'
+import { AboutPage }       from '@/pages/About'
 
 export default function App() {
   return (
@@ -14,11 +16,11 @@ export default function App() {
           <Navbar />
           <main className="flex-1">
             <Routes>
-              <Route path="/"           element={<CreatePastePage />} />
-              <Route path="/p/:id"      element={<ViewPastePage />} />
-              <Route path="/auth"       element={<AuthPage />} />
-              <Route path="/dashboard"  element={<DashboardPage />} />
-              {/* Catch-all */}
+              <Route path="/"          element={<CreatePastePage />} />
+              <Route path="/p/:id"     element={<ViewPastePage />} />
+              <Route path="/auth"      element={<AuthPage />} />
+              <Route path="/dashboard" element={<DashboardPage />} />
+              <Route path="/about"     element={<AboutPage />} />
               <Route path="*" element={
                 <div className="flex items-center justify-center min-h-[60vh] flex-col gap-4">
                   <p className="text-5xl">404</p>
@@ -28,16 +30,7 @@ export default function App() {
               } />
             </Routes>
           </main>
-
-          {/* Footer */}
-          <footer className="border-t border-[var(--border)] py-4 mt-8">
-            <div className="max-w-6xl mx-auto px-4 flex items-center justify-between text-xs text-[var(--text-faint)]">
-              <span>PrivatePaste — fast, private, edge-deployed</span>
-              <div className="flex items-center gap-4">
-                <a href="/api/health" className="hover:text-[var(--text-muted)] transition-colors">API status</a>
-              </div>
-            </div>
-          </footer>
+          <Footer />
         </div>
       </AuthProvider>
     </BrowserRouter>
