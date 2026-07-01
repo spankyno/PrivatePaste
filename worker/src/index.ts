@@ -10,11 +10,18 @@ import pastesRouter from './routes/pastes'
 import foldersRouter from './routes/folders'
 import { handleScheduled } from './cron'
 import { hashPassword, verifyPassword, needsRehash } from './lib/password'
+import { errorResponse } from './lib/http'
+import { authRateLimit } from './middleware/rateLimit'
 
 const app = new Hono<{ Bindings: Env }>()
 
 // ⚠ Sustituye con tu URL real del Worker tras el primer deploy
 const PRODUCTION_URL = 'https://privatepaste-production.kbo1.workers.dev'
+
+// Red de seguridad: cualquier excepción no capturada por una ruta/middleware
+// (incluidas las que puedan lanzar Hono o sus propios middlewares) pasa por
+// aquí en lugar de devolver el stack trace por defecto al cliente.
+app.onError((err, c) => errorResponse(c, 'Internal server error', err, 500))
 
 // ─── Middleware global ────────────────────────────────────────────────────────
 app.use('*', secureHeaders())
@@ -43,7 +50,7 @@ function jsonRes(data: unknown, status = 200, headers: Record<string, string> = 
 }
 
 // ─── POST /api/auth/sign-up/email ─────────────────────────────────────────────
-app.post('/api/auth/sign-up/email', async (c) => {
+app.post('/api/auth/sign-up/email', authRateLimit, async (c) => {
   try {
     const body = await c.req.json<{ email: string; password: string; name?: string }>()
     if (!body.email || !body.password)
@@ -82,13 +89,12 @@ app.post('/api/auth/sign-up/email', async (c) => {
       201, { 'Set-Cookie': setCookie(token) }
     )
   } catch (err) {
-    console.error('[sign-up]', err)
-    return jsonRes({ error: 'Registration failed', detail: String(err) }, 500)
+    return errorResponse(c, 'Registration failed', err)
   }
 })
 
 // ─── POST /api/auth/sign-in/email ─────────────────────────────────────────────
-app.post('/api/auth/sign-in/email', async (c) => {
+app.post('/api/auth/sign-in/email', authRateLimit, async (c) => {
   try {
     const body = await c.req.json<{ email: string; password: string }>()
     if (!body.email || !body.password)
@@ -131,8 +137,7 @@ app.post('/api/auth/sign-in/email', async (c) => {
       200, { 'Set-Cookie': setCookie(token) }
     )
   } catch (err) {
-    console.error('[sign-in]', err)
-    return jsonRes({ error: 'Login failed', detail: String(err) }, 500)
+    return errorResponse(c, 'Login failed', err)
   }
 })
 
