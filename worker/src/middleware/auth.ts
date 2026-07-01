@@ -5,13 +5,14 @@
  */
 import type { Context, Next } from 'hono'
 import type { Env } from '../lib/types'
-import { roleToTier } from '../lib/tiers'
+import { roleToTier, getProExpiresAt, isProExpired } from '../lib/tiers'
 
 export interface AuthUser {
-  id:    string
-  email: string
-  name:  string | null
-  role:  'registered' | 'pro' | 'admin'
+  id:           string
+  email:        string
+  name:         string | null
+  role:         'registered' | 'pro' | 'admin'
+  proExpiresAt: number | null
 }
 
 declare module 'hono' {
@@ -48,14 +49,14 @@ export async function authMiddleware(
     const now = Math.floor(Date.now() / 1000)
     const row = await c.env.DB.prepare(`
       SELECT s.expires_at,
-             u.id, u.email, u.name, u.role
+             u.id, u.email, u.name, u.role, u.updated_at
       FROM sessions s
       INNER JOIN users u ON u.id = s.user_id
       WHERE s.token = ?
       LIMIT 1
     `).bind(token).first<{
       expires_at: number
-      id: string; email: string; name: string | null; role: string
+      id: string; email: string; name: string | null; role: string; updated_at: number
     }>()
 
     if (!row || row.expires_at < now) {
@@ -64,11 +65,25 @@ export async function authMiddleware(
       return next()
     }
 
+    // Downgrade perezoso: si el PRO ya caducó (1 año desde updated_at,
+    // fijado al recibir el pago) pero el cron horario aún no ha pasado,
+    // se refleja de inmediato en esta petición y se persiste en segundo
+    // plano sin bloquear la respuesta.
+    let role = row.role as AuthUser['role']
+    if (role === 'pro' && isProExpired(row.updated_at, now)) {
+      role = 'registered'
+      c.executionCtx.waitUntil(
+        c.env.DB.prepare("UPDATE users SET role = 'registered', updated_at = ? WHERE id = ? AND role = 'pro'")
+          .bind(now, row.id).run()
+      )
+    }
+
     const user: AuthUser = {
-      id:    row.id,
-      email: row.email,
-      name:  row.name,
-      role:  row.role as AuthUser['role'],
+      id:           row.id,
+      email:        row.email,
+      name:         row.name,
+      role,
+      proExpiresAt: role === 'pro' ? getProExpiresAt(row.updated_at) : null,
     }
 
     c.set('user',     user)
