@@ -31,10 +31,11 @@ export interface Paste {
 }
 
 export interface ApiUser {
-  id:    string
-  email: string
-  name:  string | null
-  role:  'registered' | 'pro' | 'admin'
+  id:           string
+  email:        string
+  name:         string | null
+  role:         'registered' | 'pro' | 'admin'
+  proExpiresAt: number | null
 }
 
 export interface SessionResponse {
