@@ -52,6 +52,7 @@ app.use('*', cors({
 app.use('/api/*', logger())
 app.use('/api/*', authMiddleware)
 app.use('/api/*', rateLimitMiddleware)
+app.use('/raw/*', authMiddleware)
 
 // ─── Health ───────────────────────────────────────────────────────────────────
 app.get('/api/health', (c) => c.json({ ok: true, ts: Date.now() }))
@@ -253,15 +254,18 @@ app.route('/api/folders', foldersRouter)
 
 // ─── Raw ──────────────────────────────────────────────────────────────────────
 app.get('/raw/:id', async (c) => {
-  const { id } = c.req.param()
-  const now    = Math.floor(Date.now() / 1000)
-  const paste  = await c.env.DB.prepare('SELECT * FROM pastes WHERE id = ?').bind(id).first<any>()
-  if (!paste)                                     return c.text('Not found', 404)
-  if (paste.expires_at && paste.expires_at < now) return c.text('Expired', 410)
-  if (paste.visibility === 'private' && paste.user_id !== c.get('userId'))
-                                                  return c.text('Private', 403)
-  if (paste.visibility === 'password' && paste.user_id !== c.get('userId'))
-                                                  return c.text('Password required', 403)
+  const { id }    = c.req.param()
+  const now       = Math.floor(Date.now() / 1000)
+  const userId    = c.get('userId')
+  const paste     = await c.env.DB.prepare('SELECT * FROM pastes WHERE id = ?').bind(id).first<any>()
+  if (!paste) return c.text('Not found', 404)
+
+  const isOwner   = !!userId && paste.user_id === userId
+  const isExpired = paste.expires_at && paste.expires_at < now
+
+  if (isExpired && !isOwner)                          return c.text('Expired', 410)
+  if (paste.visibility === 'private' && !isOwner)      return c.text('Private', 403)
+  if (paste.visibility === 'password' && !isOwner)     return c.text('Password required', 403)
   c.executionCtx.waitUntil(
     c.env.DB.prepare('UPDATE pastes SET views = views + 1 WHERE id = ?').bind(id).run()
   )
