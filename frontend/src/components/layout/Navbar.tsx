@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { useDarkMode } from '@/hooks/useDarkMode'
 import { useAuth } from '@/hooks/useAuth'
 import { api } from '@/lib/api'
+import { format, fromUnixTime } from 'date-fns'
 import clsx from 'clsx'
 
 export function Navbar() {
@@ -76,6 +77,11 @@ export function Navbar() {
                 className="absolute right-0 top-full mt-1 w-52 card shadow-lg z-50 py-1 animate-fade-in"
                 onMouseLeave={() => setMenu(false)}
               >
+                {tier === 'pro' && user.proExpiresAt && (
+                  <div className="px-3 py-2 text-xs text-[var(--text-muted)] border-b border-[var(--border)]">
+                    Pro until {format(fromUnixTime(user.proExpiresAt), 'PP')}
+                  </div>
+                )}
                 <Link
                   to="/dashboard"
                   className="flex items-center gap-2 px-3 py-2 text-sm text-[var(--text)] hover:bg-[var(--bg-tertiary)] transition-colors"
