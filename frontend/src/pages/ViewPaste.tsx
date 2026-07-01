@@ -150,6 +150,7 @@ export function ViewPastePage() {
   if (!paste) return null
 
   const isOwner   = user && paste.userId === user.id
+  const isExpired = !!paste.expiresAt && paste.expiresAt < Math.floor(Date.now() / 1000)
   const expiryStr = paste.expiresAt
     ? `Expires ${formatDistanceToNow(fromUnixTime(paste.expiresAt), { addSuffix: true })}`
     : 'Never expires'
@@ -192,6 +193,14 @@ export function ViewPastePage() {
   // ── Main view ───────────────────────────────────────────────────────────────
   return (
     <div className="max-w-6xl mx-auto px-4 py-6 flex flex-col gap-4 animate-fade-in">
+      {isOwner && isExpired && (
+        <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-2.5 text-sm text-amber-700 dark:text-amber-400 flex items-center gap-2">
+          <Clock className="w-4 h-4 flex-shrink-0" />
+          This paste expired {formatDistanceToNow(fromUnixTime(paste.expiresAt!), { addSuffix: true })} and is now
+          archived — it's no longer publicly accessible, but you can still view it here since you're the owner.
+        </div>
+      )}
+
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center gap-3">
         <div className="flex-1 min-w-0">

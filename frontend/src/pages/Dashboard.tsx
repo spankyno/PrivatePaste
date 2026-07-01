@@ -6,7 +6,7 @@ import { Link, Navigate } from 'react-router-dom'
 import {
   Search, FileText, Trash2, ExternalLink, Eye, Clock, Lock, Globe, EyeOff,
   Plus, Loader2, Copy, Check, Folder as FolderIcon, FolderPlus, Pencil,
-  X, FolderInput, GripVertical,
+  X, FolderInput, GripVertical, Archive,
 } from 'lucide-react'
 import { useAuth } from '@/hooks/useAuth'
 import { api, type Paste, type Folder as FolderType } from '@/lib/api'
@@ -22,6 +22,7 @@ export function DashboardPage() {
   const [query,    setQuery]    = useState('')
   const [folderId, setFolderId] = useState<string | undefined>()
   const [page,     setPage]     = useState(1)
+  const [showArchived, setShowArchived] = useState(false)
   const [loading,  setLoading]  = useState(true)
   const [deleting, setDeleting] = useState<string | null>(null)
   const [copiedId, setCopiedId] = useState<string | null>(null)
@@ -45,14 +46,14 @@ export function DashboardPage() {
     setLoading(true)
     try {
       const [pastesRes, foldersRes] = await Promise.all([
-        api.listPastes({ q: query || undefined, folderId, page }),
+        api.listPastes({ q: query || undefined, folderId, page, archived: showArchived }),
         api.listFolders(),
       ])
       setPastes(pastesRes.pastes)
       setFolders(foldersRes.folders)
     } catch { /* handled */ }
     finally { setLoading(false) }
-  }, [query, folderId, page])
+  }, [query, folderId, page, showArchived])
 
   useEffect(() => { if (user) fetchAll() }, [user, fetchAll])
 
@@ -313,6 +314,19 @@ export function DashboardPage() {
                 <FolderIcon className="w-3 h-3" /> {activeFolder.name}
               </span>
             )}
+            {tier === 'pro' && (
+              <button
+                onClick={() => { setShowArchived(v => !v); setPage(1) }}
+                className={clsx(
+                  'btn-secondary text-xs py-1.5 px-3 flex-shrink-0',
+                  showArchived && 'bg-brand-600/10 text-brand-600 dark:text-brand-400 border-brand-600/30'
+                )}
+                title="Expired pastes are archived instead of deleted on the Pro plan"
+              >
+                <Archive className="w-3.5 h-3.5" />
+                {showArchived ? 'Archived' : 'Show archived'}
+              </button>
+            )}
           </div>
 
           {loading ? (
@@ -322,8 +336,10 @@ export function DashboardPage() {
           ) : pastes.length === 0 ? (
             <div className="text-center py-16 text-[var(--text-muted)]">
               <FileText className="w-10 h-10 mx-auto mb-3 opacity-30" />
-              <p className="font-medium">{query ? 'No results found' : 'No pastes yet'}</p>
-              {!query && (
+              <p className="font-medium">
+                {query ? 'No results found' : showArchived ? 'No archived pastes' : 'No pastes yet'}
+              </p>
+              {!query && !showArchived && (
                 <Link to="/" className="btn-primary mt-4 inline-flex">Create your first paste</Link>
               )}
             </div>
@@ -353,6 +369,11 @@ export function DashboardPage() {
                         <span className="badge bg-[var(--bg-tertiary)] text-[var(--text-muted)] hidden sm:inline-flex">
                           {paste.language}
                         </span>
+                        {paste.isArchived && (
+                          <span className="badge bg-amber-500/10 text-amber-600 dark:text-amber-400 inline-flex items-center gap-1">
+                            <Archive className="w-3 h-3" /> Archived
+                          </span>
+                        )}
                       </div>
                       <div className="flex items-center gap-3 mt-1 text-xs text-[var(--text-faint)]">
                         <span className="flex items-center gap-1">
