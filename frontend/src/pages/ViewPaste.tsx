@@ -6,7 +6,7 @@ import { useEffect, useState } from 'react'
 import { useParams, Link, useNavigate } from 'react-router-dom'
 import ReactCodeMirror from '@uiw/react-codemirror'
 import { oneDark } from '@codemirror/theme-one-dark'
-import { Copy, Check, ExternalLink, Trash2, Clock, Eye, Lock, Globe, EyeOff, Loader2 } from 'lucide-react'
+import { Copy, Check, ExternalLink, Trash2, Clock, Eye, Lock, Globe, EyeOff, Loader2, Pencil, Save, X } from 'lucide-react'
 import { useDarkMode } from '@/hooks/useDarkMode'
 import { useAuth } from '@/hooks/useAuth'
 import { api, type Paste, ApiError } from '@/lib/api'
@@ -26,6 +26,12 @@ export function ViewPastePage() {
   const [langExt,     setLangExt]     = useState<any>([])
   const [copied,      setCopied]      = useState(false)
   const [deleting,    setDeleting]    = useState(false)
+
+  // Edit state
+  const [editing,     setEditing]     = useState(false)
+  const [editContent, setEditContent] = useState('')
+  const [saving,      setSaving]      = useState(false)
+  const [saveError,   setSaveError]   = useState<string | null>(null)
 
   // Password unlock state
   const [locked,      setLocked]      = useState(false)
@@ -92,6 +98,37 @@ export function ViewPastePage() {
     } catch (err: any) {
       alert(err.message)
       setDeleting(false)
+    }
+  }
+
+  const handleEditStart = () => {
+    if (!paste) return
+    setEditContent(paste.content ?? '')
+    setSaveError(null)
+    setEditing(true)
+  }
+
+  const handleEditCancel = () => {
+    setEditing(false)
+    setSaveError(null)
+  }
+
+  const handleEditSave = async () => {
+    if (!id) return
+    if (!editContent.trim()) {
+      setSaveError('Content cannot be empty')
+      return
+    }
+    setSaving(true)
+    setSaveError(null)
+    try {
+      const updated = await api.updatePaste(id, { content: editContent })
+      setPaste(updated)
+      setEditing(false)
+    } catch (err: any) {
+      setSaveError(err.message ?? 'Failed to save changes')
+    } finally {
+      setSaving(false)
     }
   }
 
@@ -181,47 +218,84 @@ export function ViewPastePage() {
 
         {/* Action buttons */}
         <div className="flex items-center gap-2 flex-shrink-0">
-          <a
-            href={`/raw/${paste.id}`}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="btn-secondary text-xs py-1.5 px-3"
-          >
-            <ExternalLink className="w-3.5 h-3.5" />
-            Raw
-          </a>
+          {editing ? (
+            <>
+              <button
+                onClick={handleEditCancel}
+                disabled={saving}
+                className="btn-secondary text-xs py-1.5 px-3"
+              >
+                <X className="w-3.5 h-3.5" />
+                Cancel
+              </button>
+              <button
+                onClick={handleEditSave}
+                disabled={saving}
+                className="btn-primary text-xs py-1.5 px-3"
+              >
+                {saving
+                  ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  : <Save    className="w-3.5 h-3.5" />}
+                {saving ? 'Saving…' : 'Save'}
+              </button>
+            </>
+          ) : (
+            <>
+              <a
+                href={`/raw/${paste.id}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="btn-secondary text-xs py-1.5 px-3"
+              >
+                <ExternalLink className="w-3.5 h-3.5" />
+                Raw
+              </a>
 
-          <button onClick={handleCopy} className="btn-secondary text-xs py-1.5 px-3">
-            {copied
-              ? <><Check className="w-3.5 h-3.5 text-green-500" /> Copied</>
-              : <><Copy  className="w-3.5 h-3.5" /> Copy</>}
-          </button>
+              <button onClick={handleCopy} className="btn-secondary text-xs py-1.5 px-3">
+                {copied
+                  ? <><Check className="w-3.5 h-3.5 text-green-500" /> Copied</>
+                  : <><Copy  className="w-3.5 h-3.5" /> Copy</>}
+              </button>
 
-          {isOwner && (
-            <button
-              onClick={handleDelete}
-              disabled={deleting}
-              className="btn-danger text-xs py-1.5 px-3"
-            >
-              {deleting
-                ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                : <Trash2  className="w-3.5 h-3.5" />}
-              {deleting ? 'Deleting…' : 'Delete'}
-            </button>
+              {isOwner && (
+                <button onClick={handleEditStart} className="btn-secondary text-xs py-1.5 px-3">
+                  <Pencil className="w-3.5 h-3.5" />
+                  Edit
+                </button>
+              )}
+
+              {isOwner && (
+                <button
+                  onClick={handleDelete}
+                  disabled={deleting}
+                  className="btn-danger text-xs py-1.5 px-3"
+                >
+                  {deleting
+                    ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    : <Trash2  className="w-3.5 h-3.5" />}
+                  {deleting ? 'Deleting…' : 'Delete'}
+                </button>
+              )}
+            </>
           )}
         </div>
       </div>
 
-      {/* Code editor (read-only) */}
+      {saveError && (
+        <p className="text-red-500 text-sm -mt-2">{saveError}</p>
+      )}
+
+      {/* Code editor (read-only unless editing) */}
       <div className="rounded-xl border border-[var(--border)] overflow-hidden">
         <ReactCodeMirror
-          value={paste.content}
+          value={editing ? editContent : paste.content}
           extensions={langExt}
           theme={dark ? oneDark : undefined}
-          editable={false}
+          editable={editing}
+          onChange={(value) => { if (editing) setEditContent(value) }}
           basicSetup={{
             lineNumbers:      true,
-            highlightActiveLine: false,
+            highlightActiveLine: editing,
             foldGutter:       true,
           }}
           style={{ fontSize: 14 }}
@@ -233,7 +307,7 @@ export function ViewPastePage() {
         <span>
           Created {formatDistanceToNow(fromUnixTime(paste.createdAt), { addSuffix: true })}
         </span>
-        <span>{paste.content?.length.toLocaleString()} chars</span>
+        <span>{(editing ? editContent : paste.content)?.length.toLocaleString()} chars</span>
       </div>
     </div>
   )
