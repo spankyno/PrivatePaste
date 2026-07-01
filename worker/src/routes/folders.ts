@@ -6,6 +6,7 @@ import { nanoid } from 'nanoid'
 import type { Env } from '../lib/types'
 import { requireAuth } from '../middleware/auth'
 import { TIER_LIMITS } from '../lib/tiers'
+import { errorResponse } from '../lib/http'
 
 const router = new Hono<{ Bindings: Env }>()
 router.use('*', requireAuth)
@@ -42,8 +43,7 @@ router.get('/', async (c) => {
     ).bind(userId).all()
     return json({ folders: rows.results.map(toCamel) })
   } catch (err) {
-    console.error('[GET /folders]', err)
-    return json({ error: String(err) }, 500)
+    return errorResponse(c, 'Failed to list folders', err)
   }
 })
 
@@ -72,8 +72,7 @@ router.post('/', async (c) => {
 
     return json({ id, userId, parentId: body.parentId ?? null, name: body.name.trim(), slug, color, createdAt: now, updatedAt: now }, 201)
   } catch (err) {
-    console.error('[POST /folders]', err)
-    return json({ error: 'Failed to create folder', detail: String(err) }, 500)
+    return errorResponse(c, 'Failed to create folder', err)
   }
 })
 
@@ -104,8 +103,7 @@ router.patch('/:id', async (c) => {
 
     return json({ updated: true })
   } catch (err) {
-    console.error('[PATCH /folders/:id]', err)
-    return json({ error: String(err) }, 500)
+    return errorResponse(c, 'Failed to update folder', err)
   }
 })
 
@@ -125,8 +123,7 @@ router.delete('/:id', async (c) => {
 
     return json({ deleted: true })
   } catch (err) {
-    console.error('[DELETE /folders/:id]', err)
-    return json({ error: String(err) }, 500)
+    return errorResponse(c, 'Failed to delete folder', err)
   }
 })
 

@@ -9,6 +9,7 @@ import { TIER_LIMITS, expiryToTimestamp } from '../lib/tiers'
 import { requireAuth } from '../middleware/auth'
 import { pasteCreationRateLimit } from '../middleware/rateLimit'
 import { hashPassword, verifyPassword, needsRehash } from '../lib/password'
+import { errorResponse } from '../lib/http'
 
 const router = new Hono<{ Bindings: Env }>()
 
@@ -104,8 +105,7 @@ router.post('/', pasteCreationRateLimit, async (c) => {
 
     return json({ id, url: `/p/${id}` }, 201)
   } catch (err) {
-    console.error('[POST /pastes]', err)
-    return json({ error: 'Failed to create paste', detail: String(err) }, 500)
+    return errorResponse(c, 'Failed to create paste', err)
   }
 })
 
@@ -141,8 +141,7 @@ router.get('/', requireAuth, async (c) => {
 
     return json({ pastes: rows.map(toCamelPaste), page, limit })
   } catch (err) {
-    console.error('[GET /pastes]', err)
-    return json({ error: String(err) }, 500)
+    return errorResponse(c, 'Failed to list pastes', err)
   }
 })
 
@@ -169,8 +168,7 @@ router.get('/:id', async (c) => {
     )
     return json(toCamelPaste(paste))
   } catch (err) {
-    console.error('[GET /pastes/:id]', err)
-    return json({ error: String(err) }, 500)
+    return errorResponse(c, 'Failed to retrieve paste', err)
   }
 })
 
@@ -203,7 +201,7 @@ router.post('/:id/unlock', async (c) => {
     )
     return json(toCamelPaste(paste))
   } catch (err) {
-    return json({ error: String(err) }, 500)
+    return errorResponse(c, 'Failed to unlock paste', err)
   }
 })
 
@@ -232,8 +230,7 @@ router.patch('/:id', requireAuth, async (c) => {
 
     return json({ updated: true })
   } catch (err) {
-    console.error('[PATCH /pastes/:id]', err)
-    return json({ error: String(err) }, 500)
+    return errorResponse(c, 'Failed to update paste', err)
   }
 })
 
@@ -249,7 +246,7 @@ router.delete('/:id', requireAuth, async (c) => {
     await c.env.DB.prepare('DELETE FROM pastes WHERE id = ?').bind(id).run()
     return json({ deleted: true })
   } catch (err) {
-    return json({ error: String(err) }, 500)
+    return errorResponse(c, 'Failed to delete paste', err)
   }
 })
 
