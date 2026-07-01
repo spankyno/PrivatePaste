@@ -210,15 +210,35 @@ router.patch('/:id', requireAuth, async (c) => {
   try {
     const { id }  = c.req.param()
     const userId  = c.get('userId')!
+    const tier    = c.get('tier')
+    const limits  = TIER_LIMITS[tier]
 
     const existing = await c.env.DB.prepare(
       'SELECT id FROM pastes WHERE id = ? AND user_id = ?'
     ).bind(id, userId).first()
     if (!existing) return json({ error: 'Not found or not yours' }, 404)
 
-    const body = await c.req.json<{ title?: string; folderId?: string | null }>()
+    const body = await c.req.json<{
+      title?: string
+      folderId?: string | null
+      content?: string
+      language?: string
+    }>()
     const now  = Math.floor(Date.now() / 1000)
 
+    if (body.content !== undefined) {
+      if (!body.content.trim())
+        return json({ error: 'Content cannot be empty' }, 400)
+      const bytes = new TextEncoder().encode(body.content).length
+      if (bytes > limits.maxPasteSizeBytes)
+        return json({ error: `Content too large. Limit: ${Math.round(limits.maxPasteSizeBytes / 1024)}KB` }, 413)
+      await c.env.DB.prepare('UPDATE pastes SET content = ?, updated_at = ? WHERE id = ?')
+        .bind(body.content, now, id).run()
+    }
+    if (body.language !== undefined) {
+      await c.env.DB.prepare('UPDATE pastes SET language = ?, updated_at = ? WHERE id = ?')
+        .bind(body.language, now, id).run()
+    }
     if (body.title !== undefined) {
       await c.env.DB.prepare('UPDATE pastes SET title = ?, updated_at = ? WHERE id = ?')
         .bind(body.title, now, id).run()
@@ -228,7 +248,8 @@ router.patch('/:id', requireAuth, async (c) => {
         .bind(body.folderId, now, id).run()
     }
 
-    return json({ updated: true })
+    const updated = await c.env.DB.prepare('SELECT * FROM pastes WHERE id = ?').bind(id).first<any>()
+    return json(toCamelPaste(updated))
   } catch (err) {
     return errorResponse(c, 'Failed to update paste', err)
   }
