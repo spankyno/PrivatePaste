@@ -9,6 +9,7 @@ import { rateLimitMiddleware } from './middleware/rateLimit'
 import pastesRouter from './routes/pastes'
 import foldersRouter from './routes/folders'
 import { handleScheduled } from './cron'
+import { hashPassword, verifyPassword, needsRehash } from './lib/password'
 
 const app = new Hono<{ Bindings: Env }>()
 
@@ -31,19 +32,7 @@ app.use('/api/*', rateLimitMiddleware)
 app.get('/api/health', (c) => c.json({ ok: true, ts: Date.now() }))
 
 // ─── Auth helpers ─────────────────────────────────────────────────────────────
-async function hashPw(password: string): Promise<string> {
-  const salt = nanoid(16)
-  const data = new TextEncoder().encode(salt + password)
-  const hash = await crypto.subtle.digest('SHA-256', data)
-  return `${salt}:${Array.from(new Uint8Array(hash)).map(b => b.toString(16).padStart(2, '0')).join('')}`
-}
-async function verifyPw(password: string, stored: string): Promise<boolean> {
-  const [salt, hash] = stored.split(':')
-  if (!salt || !hash) return false
-  const data = new TextEncoder().encode(salt + password)
-  const h    = await crypto.subtle.digest('SHA-256', data)
-  return Array.from(new Uint8Array(h)).map(b => b.toString(16).padStart(2, '0')).join('') === hash
-}
+// hashPassword/verifyPassword ahora viven en ./lib/password.ts (PBKDF2-SHA256)
 function setCookie(token: string, clear = false): string {
   return `pp_session=${clear ? '' : token}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${clear ? 0 : 2592000}`
 }
@@ -79,7 +68,7 @@ app.post('/api/auth/sign-up/email', async (c) => {
 
     await db.prepare(
       'INSERT INTO accounts (id, account_id, provider_id, user_id, password, created_at, updated_at) VALUES (?,?,?,?,?,?,?)'
-    ).bind(nanoid(), userId, 'email', userId, await hashPw(body.password), now, now).run()
+    ).bind(nanoid(), userId, 'email', userId, await hashPassword(body.password), now, now).run()
 
     await db.prepare(
       'INSERT INTO sessions (id, user_id, token, expires_at, ip_address, user_agent, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?)'
@@ -116,8 +105,16 @@ app.post('/api/auth/sign-in/email', async (c) => {
       .bind(user.id, 'email').first<{ password: string }>()
     if (!account?.password) return jsonRes({ error: 'Invalid email or password' }, 401)
 
-    if (!await verifyPw(body.password, account.password))
+    if (!await verifyPassword(body.password, account.password))
       return jsonRes({ error: 'Invalid email or password' }, 401)
+
+    // Migración transparente: si el hash guardado es del esquema antiguo
+    // (SHA-256 simple) o usa menos iteraciones que las actuales, se
+    // regenera con PBKDF2 ahora que tenemos la contraseña en texto plano.
+    if (needsRehash(account.password)) {
+      await db.prepare('UPDATE accounts SET password = ?, updated_at = ? WHERE user_id = ? AND provider_id = ?')
+        .bind(await hashPassword(body.password), now, user.id, 'email').run()
+    }
 
     const token = nanoid(32)
     const exp   = now + 2592000
