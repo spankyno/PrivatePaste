@@ -8,6 +8,7 @@ import type { Env } from '../lib/types'
 import { TIER_LIMITS, expiryToTimestamp } from '../lib/tiers'
 import { requireAuth } from '../middleware/auth'
 import { pasteCreationRateLimit } from '../middleware/rateLimit'
+import { hashPassword, verifyPassword, needsRehash } from '../lib/password'
 
 const router = new Hono<{ Bindings: Env }>()
 
@@ -36,20 +37,7 @@ function toCamelPaste(row: any) {
   }
 }
 
-async function hashPassword(password: string): Promise<string> {
-  const salt = nanoid(16)
-  const data = new TextEncoder().encode(salt + password)
-  const hash = await crypto.subtle.digest('SHA-256', data)
-  return `${salt}:${Array.from(new Uint8Array(hash)).map(b => b.toString(16).padStart(2, '0')).join('')}`
-}
-
-async function verifyPassword(password: string, stored: string): Promise<boolean> {
-  const [salt, hash] = stored.split(':')
-  if (!salt || !hash) return false
-  const data = new TextEncoder().encode(salt + password)
-  const newHash = await crypto.subtle.digest('SHA-256', data)
-  return Array.from(new Uint8Array(newHash)).map(b => b.toString(16).padStart(2, '0')).join('') === hash
-}
+// hashPassword/verifyPassword ahora viven en ../lib/password.ts (PBKDF2-SHA256)
 
 const CreateSchema = z.object({
   title:      z.string().max(255).default('Untitled'),
@@ -201,6 +189,14 @@ router.post('/:id/unlock', async (c) => {
 
     const ok = await verifyPassword(password, paste.password_hash)
     if (!ok) return json({ error: 'Incorrect password' }, 403)
+
+    // Migración transparente del hash legacy (SHA-256) a PBKDF2
+    if (needsRehash(paste.password_hash)) {
+      c.executionCtx.waitUntil(
+        c.env.DB.prepare('UPDATE pastes SET password_hash = ? WHERE id = ?')
+          .bind(await hashPassword(password), id).run()
+      )
+    }
 
     c.executionCtx.waitUntil(
       c.env.DB.prepare('UPDATE pastes SET views = views + 1 WHERE id = ?').bind(id).run()
