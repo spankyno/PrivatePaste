@@ -110,11 +110,12 @@ export const api = {
       body: JSON.stringify({ password }),
     }),
 
-  listPastes: (params?: { q?: string; folderId?: string; page?: number }) => {
+  listPastes: (params?: { q?: string; folderId?: string; page?: number; archived?: boolean }) => {
     const qs = new URLSearchParams()
     if (params?.q)        qs.set('q', params.q)
     if (params?.folderId) qs.set('folderId', params.folderId)
     if (params?.page)     qs.set('page', String(params.page))
+    if (params?.archived) qs.set('archived', '1')
     return apiFetch<{ pastes: Paste[]; page: number; limit: number }>(`/api/pastes?${qs}`)
   },
 
