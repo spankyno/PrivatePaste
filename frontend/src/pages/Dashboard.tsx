@@ -6,7 +6,7 @@ import { Link, Navigate } from 'react-router-dom'
 import {
   Search, FileText, Trash2, ExternalLink, Eye, Clock, Lock, Globe, EyeOff,
   Plus, Loader2, Copy, Check, Folder as FolderIcon, FolderPlus, Pencil,
-  X, FolderInput, GripVertical, Archive,
+  X, FolderInput, GripVertical, Archive, ChevronLeft, ChevronRight,
 } from 'lucide-react'
 import { useAuth } from '@/hooks/useAuth'
 import { api, type Paste, type Folder as FolderType } from '@/lib/api'
@@ -23,6 +23,7 @@ export function DashboardPage() {
   const [folderId, setFolderId] = useState<string | undefined>()
   const [page,     setPage]     = useState(1)
   const [showArchived, setShowArchived] = useState(false)
+  const [hasMore,  setHasMore]  = useState(false)
   const [loading,  setLoading]  = useState(true)
   const [deleting, setDeleting] = useState<string | null>(null)
   const [copiedId, setCopiedId] = useState<string | null>(null)
@@ -50,6 +51,7 @@ export function DashboardPage() {
         api.listFolders(),
       ])
       setPastes(pastesRes.pastes)
+      setHasMore(pastesRes.hasMore)
       setFolders(foldersRes.folders)
     } catch { /* handled */ }
     finally { setLoading(false) }
@@ -242,7 +244,7 @@ export function DashboardPage() {
 
             {/* "All pastes" — también es drop target para sacar de cualquier carpeta */}
             <button
-              onClick={() => setFolderId(undefined)}
+              onClick={() => { setFolderId(undefined); setPage(1) }}
               onDragOver={canUseFolders ? handleDragOverFolder('root') : undefined}
               onDragLeave={canUseFolders ? handleDragLeaveFolder : undefined}
               onDrop={canUseFolders ? handleDropOnFolder(null) : undefined}
@@ -259,7 +261,7 @@ export function DashboardPage() {
             {folders.map(f => (
               <div
                 key={f.id}
-                onClick={() => setFolderId(folderId === f.id ? undefined : f.id)}
+                onClick={() => { setFolderId(folderId === f.id ? undefined : f.id); setPage(1) }}
                 onDragOver={canUseFolders ? handleDragOverFolder(f.id) : undefined}
                 onDragLeave={canUseFolders ? handleDragLeaveFolder : undefined}
                 onDrop={canUseFolders ? handleDropOnFolder(f.id) : undefined}
@@ -457,6 +459,30 @@ export function DashboardPage() {
                   </div>
                 </Link>
               ))}
+            </div>
+          )}
+
+          {!loading && (pastes.length > 0 || page > 1) && (
+            <div className="flex items-center justify-between pt-4 mt-2 border-t border-[var(--border)]">
+              <button
+                onClick={() => setPage(p => Math.max(1, p - 1))}
+                disabled={page === 1}
+                className="btn-secondary text-sm py-1.5 px-3 disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                <ChevronLeft className="w-4 h-4" />
+                Previous
+              </button>
+
+              <span className="text-xs text-[var(--text-faint)]">Page {page}</span>
+
+              <button
+                onClick={() => setPage(p => p + 1)}
+                disabled={!hasMore}
+                className="btn-secondary text-sm py-1.5 px-3 disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                Next
+                <ChevronRight className="w-4 h-4" />
+              </button>
             </div>
           )}
         </div>
