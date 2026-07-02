@@ -112,34 +112,62 @@ router.post('/', pasteCreationRateLimit, async (c) => {
 // GET /api/pastes (list own)
 router.get('/', requireAuth, async (c) => {
   try {
-    const userId   = c.get('userId')!
-    const q        = c.req.query('q')
-    const folderId = c.req.query('folderId')
-    const page     = Math.max(1, parseInt(c.req.query('page') ?? '1'))
-    const limit    = Math.min(parseInt(c.req.query('limit') ?? '20'), 100)
-    const offset   = (page - 1) * limit
+    const userId    = c.get('userId')!
+    const q         = c.req.query('q')
+    const folderId  = c.req.query('folderId')
+    const page      = Math.max(1, parseInt(c.req.query('page') ?? '1'))
+    const limit     = Math.min(parseInt(c.req.query('limit') ?? '20'), 100)
+    const offset    = (page - 1) * limit
+    const now       = Math.floor(Date.now() / 1000)
+
+    // Por defecto solo se listan los pastes activos. Los pastes PRO
+    // caducados se archivan (is_archived=1) en vez de borrarse, pero no
+    // deben aparecer en el listado principal — quedan disponibles aparte
+    // con ?archived=1 (el dueño puede seguir accediendo a su contenido).
+    //
+    // El cron que fija is_archived=1 solo corre una vez por hora, así que
+    // un paste puede llevar caducado un rato con is_archived aún en 0.
+    // Para no esperar a esa próxima pasada, la caducidad se comprueba
+    // también aquí en el momento de leer (misma idea que el downgrade
+    // perezoso de cuentas PRO): un paste cuenta como "archivado" en
+    // cuanto expires_at queda en el pasado, no solo cuando el cron lo
+    // marca físicamente.
+    const showArchived = c.req.query('archived') === '1'
+    const statusFilter = showArchived
+      ? '(p.is_archived = 1 OR (p.expires_at IS NOT NULL AND p.expires_at <= ?))'
+      : '(p.is_archived = 0 AND (p.expires_at IS NULL OR p.expires_at > ?))'
+
+    // Se pide una fila de más (limit + 1) para saber si hay página
+    // siguiente sin necesidad de un COUNT(*) aparte — si vuelven más
+    // filas de las pedidas, se recorta a `limit` y se marca hasMore.
+    const fetchLimit = limit + 1
 
     let rows: any[]
     if (q) {
       const fts = await c.env.DB.prepare(
         `SELECT p.* FROM pastes p
          INNER JOIN pastes_fts f ON f.id = p.id
-         WHERE f.pastes_fts MATCH ? AND p.user_id = ?
+         WHERE f.pastes_fts MATCH ? AND p.user_id = ? AND ${statusFilter}
          ORDER BY p.created_at DESC LIMIT ? OFFSET ?`
-      ).bind(q, userId, limit, offset).all()
+      ).bind(q, userId, now, fetchLimit, offset).all()
       rows = fts.results
     } else {
       const result = folderId
         ? await c.env.DB.prepare(
-            'SELECT * FROM pastes WHERE user_id = ? AND folder_id = ? ORDER BY created_at DESC LIMIT ? OFFSET ?'
-          ).bind(userId, folderId, limit, offset).all()
+            `SELECT p.* FROM pastes p WHERE p.user_id = ? AND p.folder_id = ? AND ${statusFilter}
+             ORDER BY p.created_at DESC LIMIT ? OFFSET ?`
+          ).bind(userId, folderId, now, fetchLimit, offset).all()
         : await c.env.DB.prepare(
-            'SELECT * FROM pastes WHERE user_id = ? ORDER BY created_at DESC LIMIT ? OFFSET ?'
-          ).bind(userId, limit, offset).all()
+            `SELECT p.* FROM pastes p WHERE p.user_id = ? AND ${statusFilter}
+             ORDER BY p.created_at DESC LIMIT ? OFFSET ?`
+          ).bind(userId, now, fetchLimit, offset).all()
       rows = result.results
     }
 
-    return json({ pastes: rows.map(toCamelPaste), page, limit })
+    const hasMore = rows.length > limit
+    if (hasMore) rows = rows.slice(0, limit)
+
+    return json({ pastes: rows.map(toCamelPaste), page, limit, hasMore })
   } catch (err) {
     return errorResponse(c, 'Failed to list pastes', err)
   }
@@ -155,10 +183,17 @@ router.get('/:id', async (c) => {
     const paste = await c.env.DB.prepare('SELECT * FROM pastes WHERE id = ?').bind(id).first<any>()
 
     if (!paste) return json({ error: 'Paste not found' }, 404)
-    if (paste.expires_at && paste.expires_at < now) return json({ error: 'Paste has expired' }, 410)
-    if (paste.visibility === 'private' && paste.user_id !== userId)
+
+    const isOwner   = !!userId && paste.user_id === userId
+    const isExpired = paste.expires_at && paste.expires_at < now
+
+    // Un paste caducado (archivado para cuentas PRO/admin) deja de ser
+    // públicamente accesible, pero el dueño puede seguir consultando su
+    // contenido — solo se bloquea a terceros.
+    if (isExpired && !isOwner) return json({ error: 'Paste has expired' }, 410)
+    if (paste.visibility === 'private' && !isOwner)
       return json({ error: 'This paste is private' }, 403)
-    if (paste.visibility === 'password' && paste.user_id !== userId) {
+    if (paste.visibility === 'password' && !isOwner) {
       const safe = toCamelPaste(paste)
       return json({ ...safe, content: undefined, locked: true })
     }
