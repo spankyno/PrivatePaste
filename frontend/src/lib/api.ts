@@ -79,10 +79,10 @@ export const api = {
   me: () => apiFetch<SessionResponse>('/api/me'),
 
   // ── Auth ──────────────────────────────────────────────────────────────────
-  signUp: (email: string, password: string, name?: string) =>
+  signUp: (email: string, password: string, name?: string, turnstileToken?: string, website?: string) =>
     apiFetch('/api/auth/sign-up/email', {
       method: 'POST',
-      body: JSON.stringify({ email, password, name }),
+      body: JSON.stringify({ email, password, name, turnstileToken, website }),
     }),
 
   signIn: (email: string, password: string) =>
