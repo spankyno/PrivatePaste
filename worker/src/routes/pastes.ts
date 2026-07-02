@@ -118,29 +118,44 @@ router.get('/', requireAuth, async (c) => {
     const page      = Math.max(1, parseInt(c.req.query('page') ?? '1'))
     const limit     = Math.min(parseInt(c.req.query('limit') ?? '20'), 100)
     const offset    = (page - 1) * limit
+    const now       = Math.floor(Date.now() / 1000)
+
     // Por defecto solo se listan los pastes activos. Los pastes PRO
     // caducados se archivan (is_archived=1) en vez de borrarse, pero no
     // deben aparecer en el listado principal — quedan disponibles aparte
     // con ?archived=1 (el dueño puede seguir accediendo a su contenido).
-    const archived  = c.req.query('archived') === '1' ? 1 : 0
+    //
+    // El cron que fija is_archived=1 solo corre una vez por hora, así que
+    // un paste puede llevar caducado un rato con is_archived aún en 0.
+    // Para no esperar a esa próxima pasada, la caducidad se comprueba
+    // también aquí en el momento de leer (misma idea que el downgrade
+    // perezoso de cuentas PRO): un paste cuenta como "archivado" en
+    // cuanto expires_at queda en el pasado, no solo cuando el cron lo
+    // marca físicamente.
+    const showArchived = c.req.query('archived') === '1'
+    const statusFilter = showArchived
+      ? '(p.is_archived = 1 OR (p.expires_at IS NOT NULL AND p.expires_at <= ?))'
+      : '(p.is_archived = 0 AND (p.expires_at IS NULL OR p.expires_at > ?))'
 
     let rows: any[]
     if (q) {
       const fts = await c.env.DB.prepare(
         `SELECT p.* FROM pastes p
          INNER JOIN pastes_fts f ON f.id = p.id
-         WHERE f.pastes_fts MATCH ? AND p.user_id = ? AND p.is_archived = ?
+         WHERE f.pastes_fts MATCH ? AND p.user_id = ? AND ${statusFilter}
          ORDER BY p.created_at DESC LIMIT ? OFFSET ?`
-      ).bind(q, userId, archived, limit, offset).all()
+      ).bind(q, userId, now, limit, offset).all()
       rows = fts.results
     } else {
       const result = folderId
         ? await c.env.DB.prepare(
-            'SELECT * FROM pastes WHERE user_id = ? AND folder_id = ? AND is_archived = ? ORDER BY created_at DESC LIMIT ? OFFSET ?'
-          ).bind(userId, folderId, archived, limit, offset).all()
+            `SELECT p.* FROM pastes p WHERE p.user_id = ? AND p.folder_id = ? AND ${statusFilter}
+             ORDER BY p.created_at DESC LIMIT ? OFFSET ?`
+          ).bind(userId, folderId, now, limit, offset).all()
         : await c.env.DB.prepare(
-            'SELECT * FROM pastes WHERE user_id = ? AND is_archived = ? ORDER BY created_at DESC LIMIT ? OFFSET ?'
-          ).bind(userId, archived, limit, offset).all()
+            `SELECT p.* FROM pastes p WHERE p.user_id = ? AND ${statusFilter}
+             ORDER BY p.created_at DESC LIMIT ? OFFSET ?`
+          ).bind(userId, now, limit, offset).all()
       rows = result.results
     }
 
