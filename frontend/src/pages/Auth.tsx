@@ -6,6 +6,7 @@ import { useNavigate, Link } from 'react-router-dom'
 import { Loader2, FileCode2 } from 'lucide-react'
 import { api, ApiError } from '@/lib/api'
 import { useAuth } from '@/hooks/useAuth'
+import { TurnstileWidget } from '@/components/Turnstile'
 
 type Mode = 'signin' | 'signup'
 
@@ -17,6 +18,9 @@ export function AuthPage() {
   const [email,    setEmail]    = useState('')
   const [password, setPassword] = useState('')
   const [name,     setName]     = useState('')
+  const [website,  setWebsite]  = useState('') // honeypot — debe quedar vacío
+  const [turnstileToken, setTurnstileToken] = useState<string | undefined>()
+  const [turnstileKey,   setTurnstileKey]   = useState(0)
   const [error,    setError]    = useState<string | null>(null)
   const [loading,  setLoading]  = useState(false)
 
@@ -27,7 +31,12 @@ export function AuthPage() {
 
     try {
       if (mode === 'signup') {
-        await api.signUp(email, password, name || undefined)
+        if (!turnstileToken) {
+          setError('Please complete the verification challenge')
+          setLoading(false)
+          return
+        }
+        await api.signUp(email, password, name || undefined, turnstileToken, website)
       } else {
         await api.signIn(email, password)
       }
@@ -35,6 +44,12 @@ export function AuthPage() {
       navigate('/dashboard')
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'An error occurred')
+      if (mode === 'signup') {
+        // El token de Turnstile ya se consumió en el intento fallido;
+        // se fuerza un remount del widget para obtener uno nuevo.
+        setTurnstileToken(undefined)
+        setTurnstileKey(k => k + 1)
+      }
     } finally {
       setLoading(false)
     }
@@ -83,6 +98,27 @@ export function AuthPage() {
               </div>
             )}
 
+            {/* Honeypot: invisible para personas, los bots de relleno automático
+                suelen completarlo. No usar display:none (algunos bots lo evitan);
+                se saca de la pantalla y del flujo de tabulación en su lugar. */}
+            {mode === 'signup' && (
+              <div
+                aria-hidden="true"
+                style={{ position: 'absolute', left: '-9999px', width: 0, height: 0, overflow: 'hidden' }}
+              >
+                <label htmlFor="website">Website</label>
+                <input
+                  id="website"
+                  type="text"
+                  name="website"
+                  tabIndex={-1}
+                  autoComplete="off"
+                  value={website}
+                  onChange={e => setWebsite(e.target.value)}
+                />
+              </div>
+            )}
+
             <div className="flex flex-col gap-1.5">
               <label className="text-sm font-medium text-[var(--text-muted)]">Email</label>
               <input
@@ -108,6 +144,14 @@ export function AuthPage() {
                 className="input"
               />
             </div>
+
+            {mode === 'signup' && (
+              <TurnstileWidget
+                key={turnstileKey}
+                onVerify={setTurnstileToken}
+                onExpire={() => setTurnstileToken(undefined)}
+              />
+            )}
 
             {error && (
               <div className="rounded-lg bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 px-3 py-2 text-sm text-red-600 dark:text-red-400">
