@@ -6,11 +6,13 @@ import { useNavigate, Link } from 'react-router-dom'
 import { Loader2, FileCode2 } from 'lucide-react'
 import { api, ApiError } from '@/lib/api'
 import { useAuth } from '@/hooks/useAuth'
+import { useDocumentHead } from '@/hooks/useDocumentHead'
 import { TurnstileWidget } from '@/components/Turnstile'
 
 type Mode = 'signin' | 'signup'
 
 export function AuthPage() {
+  useDocumentHead({ title: 'Iniciar sesión', noindex: true })
   const navigate    = useNavigate()
   const { refetch } = useAuth()
   const [mode, setMode] = useState<Mode>('signin')

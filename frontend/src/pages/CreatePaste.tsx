@@ -9,6 +9,7 @@ import { oneDark } from '@codemirror/theme-one-dark'
 import { Lock, Eye, EyeOff, Globe, Clock, FolderOpen, Loader2, Copy, Check } from 'lucide-react'
 import { useAuth } from '@/hooks/useAuth'
 import { useDarkMode } from '@/hooks/useDarkMode'
+import { useDocumentHead } from '@/hooks/useDocumentHead'
 import { api, type PastePayload } from '@/lib/api'
 import { LANGUAGES, getLanguage } from '@/lib/languages'
 import { TIER_LIMITS, EXPIRY_OPTIONS } from '@/lib/tiers'
@@ -20,6 +21,7 @@ import clsx from 'clsx'
 type Visibility = 'public' | 'private' | 'password'
 
 export function CreatePastePage() {
+  useDocumentHead({ title: 'Comparte código online de forma privada' })
   const { user, tier }  = useAuth()
   const { dark }        = useDarkMode()
   const navigate        = useNavigate()

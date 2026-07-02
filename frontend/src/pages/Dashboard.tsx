@@ -9,6 +9,7 @@ import {
   X, FolderInput, GripVertical, Archive, ChevronLeft, ChevronRight,
 } from 'lucide-react'
 import { useAuth } from '@/hooks/useAuth'
+import { useDocumentHead } from '@/hooks/useDocumentHead'
 import { api, type Paste, type Folder as FolderType } from '@/lib/api'
 import { formatDistanceToNow, fromUnixTime, format } from 'date-fns'
 import clsx from 'clsx'
@@ -16,6 +17,7 @@ import clsx from 'clsx'
 const FOLDER_COLORS = ['#6366f1', '#ec4899', '#f59e0b', '#10b981', '#3b82f6', '#8b5cf6', '#ef4444', '#14b8a6']
 
 export function DashboardPage() {
+  useDocumentHead({ title: 'Mi Dashboard', noindex: true })
   const { user, tier, loading: authLoading } = useAuth()
   const [pastes,   setPastes]   = useState<Paste[]>([])
   const [folders,  setFolders]  = useState<FolderType[]>([])

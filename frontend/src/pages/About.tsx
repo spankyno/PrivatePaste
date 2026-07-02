@@ -2,6 +2,7 @@
  * About page — descripción, stack tecnológico y límites por tier.
  */
 import { Link } from 'react-router-dom'
+import { useDocumentHead } from '@/hooks/useDocumentHead'
 import {
   FileCode2, Zap, Lock, Clock, Search, FolderTree, Moon,
   Check, X, Sparkles,
@@ -52,6 +53,7 @@ function Cell({ value }: { value: string }) {
 }
 
 export function AboutPage() {
+  useDocumentHead({ title: 'Acerca de PrivatePaste' })
   return (
     <div className="max-w-4xl mx-auto px-4 py-10 flex flex-col gap-12">
 

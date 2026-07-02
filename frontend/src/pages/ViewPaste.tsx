@@ -9,6 +9,7 @@ import { oneDark } from '@codemirror/theme-one-dark'
 import { Copy, Check, ExternalLink, Trash2, Clock, Eye, Lock, Globe, EyeOff, Loader2, Pencil, Save, X } from 'lucide-react'
 import { useDarkMode } from '@/hooks/useDarkMode'
 import { useAuth } from '@/hooks/useAuth'
+import { useDocumentHead } from '@/hooks/useDocumentHead'
 import { api, type Paste, ApiError } from '@/lib/api'
 import { getLanguage } from '@/lib/languages'
 import { formatDistanceToNow, fromUnixTime } from 'date-fns'
@@ -32,6 +33,11 @@ export function ViewPastePage() {
   const [editContent, setEditContent] = useState('')
   const [saving,      setSaving]      = useState(false)
   const [saveError,   setSaveError]   = useState<string | null>(null)
+
+  // Contenido de terceros/privado — nunca debe indexarse en buscadores,
+  // más allá de que robots.txt ya lo desaconseje para los crawlers que
+  // lo respeten.
+  useDocumentHead({ title: paste?.title || 'Ver paste', noindex: true })
 
   // Password unlock state
   const [locked,      setLocked]      = useState(false)
