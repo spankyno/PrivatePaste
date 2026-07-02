@@ -23,7 +23,13 @@ migrations_dir = "migrations"
 binding = "RATE_LIMIT_KV"
 id = "a48f8c6c49a04196bcb5bcc485ae547f"
 
-# Variables públicas
+# Variables públicas (NO secretos: este archivo se versiona en git).
+# Cualquier valor sensible (API keys, AUTH_SECRET, TURNSTILE_SECRET_KEY,
+# tokens, etc.) debe configurarse SIEMPRE como Secret cifrado, nunca aquí:
+#   - Producción: `npx wrangler secret put NOMBRE_SECRETO`
+#     (o Dashboard → Workers & Pages → tu Worker → Settings → Variables and Secrets)
+#   - Desarrollo local: copia .dev.vars.example a .dev.vars (ya está en
+#     .gitignore) y `wrangler dev` lo cargará automáticamente.
 [vars]
 ENVIRONMENT = "production"
 

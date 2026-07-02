@@ -56,6 +56,13 @@ Settings → Secrets and variables → Actions → New repository secret:
 Workers & Pages → privatepaste → Settings → Variables and Secrets
 Añadir Secret: AUTH_SECRET = string aleatorio 32+ chars
 
+### Paso 8b — Cloudflare Turnstile (anti-bot en el registro)
+1. Dashboard de Cloudflare → Turnstile → Add site → widget tipo "Managed" (o "Invisible")
+2. Copiar el **Site Key** (público) → añadirlo como `VITE_TURNSTILE_SITE_KEY` en `frontend/.env`
+   (o como variable de entorno del build en tu pipeline de CI)
+3. Copiar el **Secret Key** → `npx wrangler secret put TURNSTILE_SECRET_KEY`
+   (nunca en wrangler.toml, ver comentario en ese archivo)
+
 ### Paso 9 — Primer deploy automático
 Push a main → GitHub Actions → pestaña Actions para ver el progreso
 URL resultante: https://privatepaste.TU_USUARIO.workers.dev
