@@ -7,4 +7,5 @@ export interface Env {
   ASSETS: Fetcher
   ENVIRONMENT: 'development' | 'production'
   AUTH_SECRET: string
+  TURNSTILE_SECRET_KEY: string
 }
