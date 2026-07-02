@@ -11,6 +11,7 @@ import foldersRouter from './routes/folders'
 import { handleScheduled } from './cron'
 import { hashPassword, verifyPassword, needsRehash } from './lib/password'
 import { getProExpiresAt } from './lib/tiers'
+import { verifyTurnstile } from './lib/turnstile'
 import { errorResponse } from './lib/http'
 
 const app = new Hono<{ Bindings: Env }>()
@@ -31,11 +32,12 @@ app.onError((err, c) => errorResponse(c, 'Internal server error', err, 500))
 app.use('*', secureHeaders({
   contentSecurityPolicy: {
     defaultSrc:     ["'self'"],
-    scriptSrc:      ["'self'"],
+    scriptSrc:      ["'self'", 'https://challenges.cloudflare.com'],
     styleSrc:       ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
     fontSrc:        ["'self'", 'https://fonts.gstatic.com'],
     imgSrc:         ["'self'", 'data:'],
-    connectSrc:     ["'self'"],
+    connectSrc:     ["'self'", 'https://challenges.cloudflare.com'],
+    frameSrc:       ['https://challenges.cloudflare.com'],
     objectSrc:      ["'none'"],
     baseUri:        ["'self'"],
     formAction:     ["'self'"],
@@ -71,7 +73,28 @@ function jsonRes(data: unknown, status = 200, headers: Record<string, string> = 
 // ─── POST /api/auth/sign-up/email ─────────────────────────────────────────────
 app.post('/api/auth/sign-up/email', authRateLimit, async (c) => {
   try {
-    const body = await c.req.json<{ email: string; password: string; name?: string }>()
+    const body = await c.req.json<{
+      email: string; password: string; name?: string
+      website?: string       // honeypot: campo invisible para humanos
+      turnstileToken?: string
+    }>()
+
+    // Honeypot: un bot que rellena formularios por fuerza bruta suele
+    // completar también los campos ocultos. Si viene relleno, se rechaza
+    // sin dar pistas de que se trata de un honeypot (mensaje genérico).
+    if (body.website) {
+      console.warn('[sign-up] blocked: honeypot field filled')
+      return jsonRes({ error: 'Invalid request' }, 400)
+    }
+
+    const turnstileOk = await verifyTurnstile(
+      body.turnstileToken,
+      c.env.TURNSTILE_SECRET_KEY,
+      c.req.header('CF-Connecting-IP'),
+    )
+    if (!turnstileOk)
+      return jsonRes({ error: 'Verification failed. Please try again.' }, 400)
+
     if (!body.email || !body.password)
       return jsonRes({ error: 'Email and password required' }, 400)
     if (body.password.length < 8)
