@@ -116,7 +116,7 @@ export const api = {
     if (params?.folderId) qs.set('folderId', params.folderId)
     if (params?.page)     qs.set('page', String(params.page))
     if (params?.archived) qs.set('archived', '1')
-    return apiFetch<{ pastes: Paste[]; page: number; limit: number }>(`/api/pastes?${qs}`)
+    return apiFetch<{ pastes: Paste[]; page: number; limit: number; hasMore: boolean }>(`/api/pastes?${qs}`)
   },
 
   deletePaste: (id: string) =>
