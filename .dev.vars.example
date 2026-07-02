@@ -1,0 +1,13 @@
+# Copia este archivo a ".dev.vars" (ya está en .gitignore, no se commitea)
+# y rellena los valores reales para desarrollo local con `wrangler dev`.
+#
+# IMPORTANTE: nunca pongas estos valores en wrangler.toml ni los commitees
+# en ningún otro archivo versionado. En producción se configuran con:
+#   npx wrangler secret put AUTH_SECRET
+
+AUTH_SECRET=reemplaza-por-un-string-aleatorio-de-32-o-mas-caracteres
+
+# Cloudflare Turnstile: usa las claves de prueba oficiales para desarrollo
+# local (siempre validan correctamente, no requieren cuenta real):
+# https://developers.cloudflare.com/turnstile/troubleshooting/testing/
+TURNSTILE_SECRET_KEY=1x0000000000000000000000000000000AA
