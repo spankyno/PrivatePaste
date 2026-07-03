@@ -8,4 +8,6 @@ export interface Env {
   ENVIRONMENT: 'development' | 'production'
   AUTH_SECRET: string
   TURNSTILE_SECRET_KEY: string
+  RESEND_API_KEY: string
+  EMAIL_FROM: string
 }
