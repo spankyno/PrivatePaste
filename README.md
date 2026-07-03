@@ -91,7 +91,7 @@ npm run test:watch -w worker   # modo watch
 Usa [Vitest](https://vitest.dev) con [`@cloudflare/vitest-pool-workers`](https://developers.cloudflare.com/workers/testing/vitest-integration/):
 los tests corren dentro del runtime real de Workers (workerd), con una base de
 datos D1 efímera y aislada por fichero de test (se le aplican las migraciones
-reales de `migrations/` antes de cada suite — nunca toca la base de datos real).
+reales de `migrations/` antes de cada suite — nunca toca la base de datos real). 
 
 Cobertura actual: `lib/password.ts` (PBKDF2 + compatibilidad con hashes legacy),
 `lib/tiers.ts` (roles, límites por tier, caducidad Pro) y los endpoints de
