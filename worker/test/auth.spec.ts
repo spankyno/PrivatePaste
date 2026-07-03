@@ -28,6 +28,20 @@ function mockTurnstile(success: boolean) {
   ))
 }
 
+/** Mockea tanto Turnstile como Resend (ambos con éxito) y expone el spy
+ *  para poder comprobar a qué email/asunto se intentó enviar el correo. */
+function mockTurnstileAndEmail() {
+  const fetchSpy = vi.fn(async (input: string | URL | Request) => {
+    const url = typeof input === 'string' ? input : input.toString()
+    if (url.includes('resend.com')) {
+      return new Response(JSON.stringify({ id: 'mock-email-id' }), { status: 200 })
+    }
+    return new Response(JSON.stringify({ success: true }), { status: 200 })
+  })
+  vi.stubGlobal('fetch', fetchSpy)
+  return fetchSpy
+}
+
 /** Extrae el valor de la cookie pp_session de una respuesta Set-Cookie. */
 function extractCookie(res: Response): string {
   const setCookie = res.headers.get('Set-Cookie') ?? ''
@@ -272,5 +286,121 @@ describe('POST /api/auth/change-password', () => {
       { 'CF-Connecting-IP': nextIp() },
     ))
     expect(reLogin.status).toBe(200)
+  })
+})
+
+describe('Verificación de email', () => {
+  async function signUp(email: string) {
+    const fetchSpy = mockTurnstileAndEmail()
+    const res = await request('/api/auth/sign-up/email', jsonInit(
+      { email, password: 'supersecret123', turnstileToken: 'valid', website: '' },
+      { 'CF-Connecting-IP': nextIp() },
+    ))
+    expect(res.status).toBe(201)
+    return { cookie: extractCookie(res), fetchSpy }
+  }
+
+  it('el registro envía un email de verificación vía Resend y crea el token', async () => {
+    const email = uniqueEmail()
+    const { fetchSpy } = await signUp(email)
+
+    const resendCall = fetchSpy.mock.calls.find(([input]: [string]) => input.toString().includes('resend.com'))
+    expect(resendCall).toBeDefined()
+
+    const row = await env.DB.prepare('SELECT * FROM verifications WHERE identifier = ?').bind(email).first<any>()
+    expect(row).not.toBeNull()
+    expect(row.value).toHaveLength(48)
+  })
+
+  it('una cuenta recién creada (sin verificar) tiene tier=anon aunque el rol sea registered', async () => {
+    const email = uniqueEmail()
+    const { cookie } = await signUp(email)
+
+    const me = await request('/api/me', { headers: { Cookie: cookie } })
+    const body = await me.json<any>()
+
+    expect(body.user.role).toBe('registered')
+    expect(body.user.emailVerifiedAt).toBeNull()
+    expect(body.tier).toBe('anon')
+  })
+
+  it('verificar con un token válido marca la cuenta como verificada y sube el tier', async () => {
+    const email = uniqueEmail()
+    const { cookie } = await signUp(email)
+
+    const { value: token } = await env.DB.prepare(
+      'SELECT value FROM verifications WHERE identifier = ?'
+    ).bind(email).first<{ value: string }>()
+
+    const verifyRes = await request('/api/auth/verify-email', jsonInit({ token }))
+    expect(verifyRes.status).toBe(200)
+
+    const me = await request('/api/me', { headers: { Cookie: cookie } })
+    const body = await me.json<any>()
+    expect(body.user.emailVerifiedAt).not.toBeNull()
+    expect(body.tier).toBe('registered')
+  })
+
+  it('el token es de un solo uso — verificar dos veces falla la segunda', async () => {
+    const email = uniqueEmail()
+    await signUp(email)
+    const { value: token } = await env.DB.prepare(
+      'SELECT value FROM verifications WHERE identifier = ?'
+    ).bind(email).first<{ value: string }>()
+
+    const first  = await request('/api/auth/verify-email', jsonInit({ token }))
+    const second = await request('/api/auth/verify-email', jsonInit({ token }))
+
+    expect(first.status).toBe(200)
+    expect(second.status).toBe(400)
+  })
+
+  it('un token inexistente o caducado devuelve 400', async () => {
+    const res = await request('/api/auth/verify-email', jsonInit({ token: 'no-existe-este-token' }))
+    expect(res.status).toBe(400)
+  })
+
+  it('resend-verification requiere autenticación', async () => {
+    const res = await request('/api/auth/resend-verification', { method: 'POST' })
+    expect(res.status).toBe(401)
+  })
+
+  it('resend-verification invalida el token anterior y emite uno nuevo', async () => {
+    const email = uniqueEmail()
+    const { cookie } = await signUp(email)
+
+    const { value: oldToken } = await env.DB.prepare(
+      'SELECT value FROM verifications WHERE identifier = ?'
+    ).bind(email).first<{ value: string }>()
+
+    mockTurnstileAndEmail()
+    const resendRes = await request('/api/auth/resend-verification', { method: 'POST', headers: { Cookie: cookie } })
+    expect(resendRes.status).toBe(200)
+
+    const { value: newToken } = await env.DB.prepare(
+      'SELECT value FROM verifications WHERE identifier = ?'
+    ).bind(email).first<{ value: string }>()
+    expect(newToken).not.toBe(oldToken)
+
+    // El token antiguo ya no sirve.
+    const oldRes = await request('/api/auth/verify-email', jsonInit({ token: oldToken }))
+    expect(oldRes.status).toBe(400)
+
+    // El nuevo sí.
+    const newRes = await request('/api/auth/verify-email', jsonInit({ token: newToken }))
+    expect(newRes.status).toBe(200)
+  })
+
+  it('resend-verification rechaza si el email ya está verificado', async () => {
+    const email = uniqueEmail()
+    const { cookie } = await signUp(email)
+    const { value: token } = await env.DB.prepare(
+      'SELECT value FROM verifications WHERE identifier = ?'
+    ).bind(email).first<{ value: string }>()
+    await request('/api/auth/verify-email', jsonInit({ token }))
+
+    mockTurnstileAndEmail()
+    const res = await request('/api/auth/resend-verification', { method: 'POST', headers: { Cookie: cookie } })
+    expect(res.status).toBe(400)
   })
 })
