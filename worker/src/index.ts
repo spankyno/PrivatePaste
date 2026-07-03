@@ -12,6 +12,7 @@ import { handleScheduled } from './cron'
 import { hashPassword, verifyPassword, needsRehash } from './lib/password'
 import { getProExpiresAt } from './lib/tiers'
 import { verifyTurnstile } from './lib/turnstile'
+import { sendEmail, verificationEmailHtml } from './lib/email'
 import { errorResponse } from './lib/http'
 
 const app = new Hono<{ Bindings: Env }>()
@@ -126,12 +127,86 @@ app.post('/api/auth/sign-up/email', authRateLimit, async (c) => {
       c.req.header('User-Agent') ?? null,
       now, now).run()
 
+    // Email de verificación (best-effort): no bloquea ni hace fallar el
+    // registro si Resend tarda o falla — la cuenta ya es utilizable de
+    // inmediato (con límites de tier anónimo hasta que se verifique, ver
+    // authMiddleware), y el usuario puede pedir que se reenvíe.
+    const verifyToken = nanoid(48)
+    await db.prepare(
+      'INSERT INTO verifications (id, identifier, value, expires_at, created_at, updated_at) VALUES (?,?,?,?,?,?)'
+    ).bind(nanoid(), body.email.toLowerCase(), verifyToken, now + 86400, now, now).run()
+
+    const verifyUrl = `${PRODUCTION_URL}/verify-email?token=${verifyToken}`
+    c.executionCtx.waitUntil(
+      sendEmail(c.env.RESEND_API_KEY, c.env.EMAIL_FROM, body.email.toLowerCase(),
+        'Verifica tu email en PrivatePaste', verificationEmailHtml(verifyUrl))
+    )
+
     return jsonRes(
-      { user: { id: userId, email: body.email.toLowerCase(), name: body.name ?? null, role: 'registered' } },
+      { user: { id: userId, email: body.email.toLowerCase(), name: body.name ?? null, role: 'registered', emailVerifiedAt: null } },
       201, { 'Set-Cookie': setCookie(token) }
     )
   } catch (err) {
     return errorResponse(c, 'Registration failed', err)
+  }
+})
+
+// ─── POST /api/auth/verify-email ──────────────────────────────────────────────
+app.post('/api/auth/verify-email', authRateLimit, async (c) => {
+  try {
+    const { token } = await c.req.json<{ token?: string }>()
+    if (!token) return jsonRes({ error: 'Token required' }, 400)
+
+    const now = Math.floor(Date.now() / 1000)
+    const row = await c.env.DB.prepare(
+      'SELECT id, identifier FROM verifications WHERE value = ? AND expires_at > ? LIMIT 1'
+    ).bind(token, now).first<{ id: string; identifier: string }>()
+
+    if (!row) return jsonRes({ error: 'Invalid or expired verification link' }, 400)
+
+    await c.env.DB.prepare(
+      'UPDATE users SET email_verified_at = ?, updated_at = ? WHERE email = ?'
+    ).bind(now, now, row.identifier).run()
+
+    // Un solo uso: se borra en cuanto se consume.
+    await c.env.DB.prepare('DELETE FROM verifications WHERE id = ?').bind(row.id).run()
+
+    return jsonRes({ success: true })
+  } catch (err) {
+    return errorResponse(c, 'Verification failed', err)
+  }
+})
+
+// ─── POST /api/auth/resend-verification ───────────────────────────────────────
+app.post('/api/auth/resend-verification', requireAuth, authRateLimit, async (c) => {
+  try {
+    const userId = c.get('userId')!
+    const user = await c.env.DB.prepare(
+      'SELECT email, email_verified_at FROM users WHERE id = ?'
+    ).bind(userId).first<{ email: string; email_verified_at: number | null }>()
+
+    if (!user) return jsonRes({ error: 'User not found' }, 404)
+    if (user.email_verified_at) return jsonRes({ error: 'Email already verified' }, 400)
+
+    const now = Math.floor(Date.now() / 1000)
+    // Invalida cualquier token anterior de este email antes de emitir uno nuevo.
+    await c.env.DB.prepare('DELETE FROM verifications WHERE identifier = ?')
+      .bind(user.email.toLowerCase()).run()
+
+    const verifyToken = nanoid(48)
+    await c.env.DB.prepare(
+      'INSERT INTO verifications (id, identifier, value, expires_at, created_at, updated_at) VALUES (?,?,?,?,?,?)'
+    ).bind(nanoid(), user.email.toLowerCase(), verifyToken, now + 86400, now, now).run()
+
+    const verifyUrl = `${PRODUCTION_URL}/verify-email?token=${verifyToken}`
+    c.executionCtx.waitUntil(
+      sendEmail(c.env.RESEND_API_KEY, c.env.EMAIL_FROM, user.email,
+        'Verifica tu email en PrivatePaste', verificationEmailHtml(verifyUrl))
+    )
+
+    return jsonRes({ success: true })
+  } catch (err) {
+    return errorResponse(c, 'Failed to resend verification email', err)
   }
 })
 
@@ -175,7 +250,7 @@ app.post('/api/auth/sign-in/email', authRateLimit, async (c) => {
       now, now).run()
 
     return jsonRes(
-      { user: { id: user.id, email: user.email, name: user.name, role: user.role } },
+      { user: { id: user.id, email: user.email, name: user.name, role: user.role, emailVerifiedAt: user.email_verified_at } },
       200, { 'Set-Cookie': setCookie(token) }
     )
   } catch (err) {
@@ -249,7 +324,7 @@ app.get('/api/auth/session', async (c) => {
 
   const now = Math.floor(Date.now() / 1000)
   const row = await c.env.DB.prepare(`
-    SELECT s.id as sid, s.expires_at, u.id, u.email, u.name, u.role, u.updated_at
+    SELECT s.id as sid, s.expires_at, u.id, u.email, u.name, u.role, u.updated_at, u.email_verified_at
     FROM sessions s JOIN users u ON u.id = s.user_id
     WHERE s.token = ? LIMIT 1
   `).bind(token).first<any>()
@@ -260,6 +335,7 @@ app.get('/api/auth/session', async (c) => {
     user:    {
       id: row.id, email: row.email, name: row.name, role: row.role,
       proExpiresAt: row.role === 'pro' ? getProExpiresAt(row.updated_at) : null,
+      emailVerifiedAt: row.email_verified_at,
     },
   })
 })
