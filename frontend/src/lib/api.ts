@@ -31,11 +31,12 @@ export interface Paste {
 }
 
 export interface ApiUser {
-  id:           string
-  email:        string
-  name:         string | null
-  role:         'registered' | 'pro' | 'admin'
-  proExpiresAt: number | null
+  id:              string
+  email:           string
+  name:            string | null
+  role:            'registered' | 'pro' | 'admin'
+  proExpiresAt:    number | null
+  emailVerifiedAt: number | null
 }
 
 export interface SessionResponse {
@@ -93,6 +94,15 @@ export const api = {
 
   signOut: () =>
     apiFetch('/api/auth/sign-out', { method: 'POST' }),
+
+  verifyEmail: (token: string) =>
+    apiFetch<{ success: boolean }>('/api/auth/verify-email', {
+      method: 'POST',
+      body: JSON.stringify({ token }),
+    }),
+
+  resendVerification: () =>
+    apiFetch<{ success: boolean }>('/api/auth/resend-verification', { method: 'POST' }),
 
   // ── Pastes ────────────────────────────────────────────────────────────────
   createPaste: (payload: PastePayload) =>
