@@ -8,11 +8,12 @@ import type { Env } from '../lib/types'
 import { roleToTier, getProExpiresAt, isProExpired } from '../lib/tiers'
 
 export interface AuthUser {
-  id:           string
-  email:        string
-  name:         string | null
-  role:         'registered' | 'pro' | 'admin'
-  proExpiresAt: number | null
+  id:              string
+  email:           string
+  name:            string | null
+  role:            'registered' | 'pro' | 'admin'
+  proExpiresAt:    number | null
+  emailVerifiedAt: number | null
 }
 
 declare module 'hono' {
@@ -49,7 +50,7 @@ export async function authMiddleware(
     const now = Math.floor(Date.now() / 1000)
     const row = await c.env.DB.prepare(`
       SELECT s.expires_at,
-             u.id, u.email, u.name, u.role, u.updated_at
+             u.id, u.email, u.name, u.role, u.updated_at, u.email_verified_at
       FROM sessions s
       INNER JOIN users u ON u.id = s.user_id
       WHERE s.token = ?
@@ -57,6 +58,7 @@ export async function authMiddleware(
     `).bind(token).first<{
       expires_at: number
       id: string; email: string; name: string | null; role: string; updated_at: number
+      email_verified_at: number | null
     }>()
 
     if (!row || row.expires_at < now) {
@@ -79,17 +81,27 @@ export async function authMiddleware(
     }
 
     const user: AuthUser = {
-      id:           row.id,
-      email:        row.email,
-      name:         row.name,
+      id:              row.id,
+      email:           row.email,
+      name:            row.name,
       role,
-      proExpiresAt: role === 'pro' ? getProExpiresAt(row.updated_at) : null,
+      proExpiresAt:    role === 'pro' ? getProExpiresAt(row.updated_at) : null,
+      emailVerifiedAt: row.email_verified_at,
     }
 
     c.set('user',     user)
     c.set('userId',   user.id)
-    c.set('tier',     roleToTier(user.role))
     c.set('identity', user.id)
+
+    // Cuentas registradas/pro sin email verificado quedan con los
+    // límites de creación de pastes del tier anónimo (tamaño/cantidad)
+    // hasta que verifiquen — desincentiva el registro masivo con emails
+    // ajenos/desechables para saltarse los límites de tier anon, sin
+    // bloquear el resto de la cuenta (login, dashboard, cambiar
+    // contraseña siguen disponibles). Admin queda exento: son cuentas
+    // creadas manualmente de confianza.
+    const effectiveTier = (!user.emailVerifiedAt && role !== 'admin') ? 'anon' : roleToTier(user.role)
+    c.set('tier', effectiveTier)
   } catch (err) {
     console.error('[authMiddleware]', err)
     c.set('tier', 'anon')
