@@ -1,6 +1,6 @@
 # PrivatePaste
 
-Pastebin moderno y privado desplegado en el edge de Cloudflare. 
+Pastebin moderno y privado desplegado en el edge de Cloudflare.
 **Setup 100% desde el navegador** — sin terminal local necesaria.
 
 ## Stack
@@ -73,3 +73,29 @@ Editar worker/src/routes/auth.ts → cambiar your-domain.workers.dev → tu URL 
 ## Ascender usuario a Pro
 Dashboard → D1 → privatepaste-db → Console:
 UPDATE users SET role = 'pro' WHERE email = 'tu@email.com';
+
+## Tests
+```bash
+npm test              # desde la raíz — ejecuta la suite del worker
+npm test -w worker     # equivalente, explícito
+npm run test:watch -w worker   # modo watch
+```
+Usa [Vitest](https://vitest.dev) con [`@cloudflare/vitest-pool-workers`](https://developers.cloudflare.com/workers/testing/vitest-integration/):
+los tests corren dentro del runtime real de Workers (workerd), con una base de
+datos D1 efímera y aislada por fichero de test (se le aplican las migraciones
+reales de `migrations/` antes de cada suite — nunca toca la base de datos real).
+
+Cobertura actual: `lib/password.ts` (PBKDF2 + compatibilidad con hashes legacy),
+`lib/tiers.ts` (roles, límites por tier, caducidad Pro) y los endpoints de
+`/api/auth/*` (sign-up, sign-in, change-password, honeypot, Turnstile, rate
+limiting, invalidación de sesiones). Pendiente de cubrir: `routes/pastes.ts`
+y `routes/folders.ts`.
+
+## Documentación de la API
+La especificación OpenAPI 3.1 está en [`docs/openapi.yaml`](./docs/openapi.yaml).
+Para verla de forma interactiva sin instalar nada, pega el contenido en
+[editor.swagger.io](https://editor.swagger.io/), o localmente:
+```bash
+npx @redocly/cli preview-docs docs/openapi.yaml
+```
+

@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "concurrently \"npm run dev -w worker\" \"npm run dev -w frontend\"",
     "build": "npm run build -w frontend",
+    "test": "npm test -w worker",
     "deploy": "npm run build && wrangler deploy"
   },
   "devDependencies": {
