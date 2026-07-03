@@ -1,7 +1,7 @@
 # PrivatePaste
 
 Pastebin moderno y privado desplegado en el edge de Cloudflare.
-**Setup 100% desde el navegador** — sin terminal local necesaria.
+**Setup 100% desde el navegador** — sin terminal local necesaria. 
 
 ## Stack
 
