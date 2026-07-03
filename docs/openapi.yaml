@@ -1,0 +1,579 @@
+openapi: 3.1.0
+info:
+  title: PrivatePaste API
+  version: "1.0.0"
+  description: |
+    API del Worker de PrivatePaste (Cloudflare Workers + Hono + D1).
+
+    Autenticación por cookie de sesión httpOnly (`pp_session`), fijada por
+    `sign-up`/`sign-in` y leída por el resto de endpoints protegidos. No
+    hay API keys ni tokens Bearer expuestos públicamente.
+
+    Los límites (tamaño máximo de paste, caducidad, rate limiting, etc.)
+    dependen del tier de la cuenta (anónimo / registrado / pro) — ver
+    `worker/src/lib/tiers.ts` para los valores exactos, que pueden cambiar
+    sin que ello constituya un cambio de contrato de la API.
+  contact:
+    name: Aitor Sánchez Gutiérrez
+servers:
+  - url: https://privatepaste-production.kbo1.workers.dev
+    description: Producción
+  - url: http://localhost:8787
+    description: Desarrollo local (wrangler dev)
+
+security:
+  - cookieAuth: []
+  - {}  # la mayoría de endpoints funcionan también sin sesión (tier anónimo)
+
+tags:
+  - name: Auth
+    description: Registro, login, sesión y cambio de contraseña.
+  - name: Pastes
+    description: Creación, lectura, edición y borrado de pastes.
+  - name: Folders
+    description: Organización de pastes en carpetas (solo cuentas registradas/pro).
+  - name: Misc
+    description: Salud del servicio y acceso al contenido en texto plano.
+
+paths:
+  /api/health:
+    get:
+      tags: [Misc]
+      summary: Comprobación de salud del Worker
+      security: []
+      responses:
+        "200":
+          description: El Worker está operativo
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean, example: true }
+                  ts: { type: integer, description: "Timestamp unix en ms" }
+
+  /api/auth/sign-up/email:
+    post:
+      tags: [Auth]
+      summary: Crear una cuenta con email y contraseña
+      description: |
+        Protegido por Cloudflare Turnstile (`turnstileToken`) y un campo
+        honeypot (`website`, debe llegar vacío). Sujeto a rate limiting
+        por IP y por email (ver `authRateLimit`).
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password, turnstileToken]
+              properties:
+                email:          { type: string, format: email }
+                password:       { type: string, minLength: 8, description: "Mínimo 8 caracteres" }
+                name:           { type: string, nullable: true }
+                turnstileToken: { type: string, description: "Token del widget de Cloudflare Turnstile" }
+                website:        { type: string, description: "Honeypot — debe quedar vacío. Si llega relleno, la petición se rechaza como si fuera inválida." }
+      responses:
+        "201":
+          description: Cuenta creada. Fija la cookie pp_session.
+          headers:
+            Set-Cookie: { schema: { type: string } }
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  user: { $ref: "#/components/schemas/User" }
+        "400":
+          description: Datos inválidos, honeypot relleno o Turnstile no verificado
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "409":
+          description: El email ya está registrado
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "429":
+          description: Rate limit de autenticación excedido (por IP o por email)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /api/auth/sign-in/email:
+    post:
+      tags: [Auth]
+      summary: Iniciar sesión con email y contraseña
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email:    { type: string, format: email }
+                password: { type: string }
+      responses:
+        "200":
+          description: Login correcto. Fija la cookie pp_session (no invalida otras sesiones activas).
+          headers:
+            Set-Cookie: { schema: { type: string } }
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  user: { $ref: "#/components/schemas/User" }
+        "401":
+          description: Email o contraseña incorrectos (mensaje genérico, no distingue cuál de los dos falló)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "429":
+          description: Rate limit de autenticación excedido
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /api/auth/sign-out:
+    post:
+      tags: [Auth]
+      summary: Cerrar la sesión actual
+      description: Borra la sesión asociada a la cookie actual y limpia la cookie en el navegador.
+      responses:
+        "200":
+          description: Sesión cerrada
+          headers:
+            Set-Cookie: { schema: { type: string } }
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+
+  /api/auth/change-password:
+    post:
+      tags: [Auth]
+      summary: Cambiar la contraseña de la cuenta autenticada
+      description: |
+        Requiere sesión activa. Al cambiar la contraseña se revocan todas
+        las **demás** sesiones del usuario (otros dispositivos/tokens
+        robados) — la sesión que hace la petición permanece activa.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [currentPassword, newPassword]
+              properties:
+                currentPassword: { type: string }
+                newPassword:     { type: string, minLength: 8 }
+      responses:
+        "200":
+          description: Contraseña cambiada y demás sesiones revocadas
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+        "400": { description: "Faltan campos o la nueva contraseña es demasiado corta", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "401":
+          description: No autenticado, o la contraseña actual es incorrecta
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "429":
+          description: Rate limit de autenticación excedido
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /api/auth/session:
+    get:
+      tags: [Auth]
+      summary: Consultar la sesión actual (uso programático)
+      security: []
+      responses:
+        "200":
+          description: |
+            Devuelve `{ session: null, user: null }` si no hay sesión
+            válida. El frontend usa `/api/me` en su lugar; este endpoint
+            existe para clientes externos.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  session:
+                    nullable: true
+                    type: object
+                    properties:
+                      id:        { type: string }
+                      expiresAt: { type: integer }
+                  user:
+                    nullable: true
+                    $ref: "#/components/schemas/User"
+
+  /api/me:
+    get:
+      tags: [Auth]
+      summary: Usuario y tier actuales
+      description: Endpoint usado por el frontend para hidratar la sesión al cargar la app.
+      security: []
+      responses:
+        "200":
+          description: Éxito siempre (incluso sin sesión, con user=null y tier=anon)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  user: { nullable: true, $ref: "#/components/schemas/User" }
+                  tier: { $ref: "#/components/schemas/Tier" }
+
+  /api/pastes:
+    post:
+      tags: [Pastes]
+      summary: Crear un paste
+      description: |
+        Funciona sin sesión (tier anónimo), con límites más estrictos de
+        tamaño, caducidad y cantidad diaria. `visibility: private` y
+        `expiry: never` requieren cuenta (y PRO en el caso de `never`).
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PasteCreateRequest" }
+      responses:
+        "201":
+          description: Paste creado
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:  { type: string, example: "aB3dE9fG" }
+                  url: { type: string, example: "/p/aB3dE9fG" }
+        "400": { description: "Body inválido o falta contraseña para visibility=password", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "403": { description: "Requiere cuenta (private) o Pro (never expire / password sin cuenta)", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "413": { description: "Contenido supera el límite de tamaño del tier", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "429": { description: "Límite diario de pastes anónimos alcanzado", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+
+    get:
+      tags: [Pastes]
+      summary: Listar los pastes propios (dashboard)
+      description: |
+        Requiere sesión. Por defecto solo devuelve pastes activos
+        (`is_archived=0` y no caducados); usa `archived=1` para ver los
+        caducados/archivados (solo relevante para cuentas Pro/admin).
+      parameters:
+        - { name: q,        in: query, schema: { type: string }, description: "Búsqueda full-text en título/contenido (registered/pro)" }
+        - { name: folderId, in: query, schema: { type: string } }
+        - { name: page,     in: query, schema: { type: integer, minimum: 1, default: 1 } }
+        - { name: limit,    in: query, schema: { type: integer, maximum: 100, default: 20 } }
+        - { name: archived, in: query, schema: { type: string, enum: ["0", "1"] }, description: "1 = solo pastes archivados/caducados" }
+      responses:
+        "200":
+          description: Página de resultados
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  pastes:  { type: array, items: { $ref: "#/components/schemas/Paste" } }
+                  page:    { type: integer }
+                  limit:   { type: integer }
+                  hasMore: { type: boolean, description: "true si existe una página siguiente" }
+        "401":
+          description: No autenticado
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /api/pastes/{id}:
+    get:
+      tags: [Pastes]
+      summary: Ver un paste por id
+      description: |
+        Sin sesión: solo pastes públicos y no caducados. El dueño puede
+        ver su propio paste aunque esté caducado/archivado, sea privado,
+        o tenga contraseña (contenido completo, sin necesidad de
+        `/unlock`). Incrementa el contador de vistas.
+      security: []
+      parameters:
+        - { $ref: "#/components/parameters/PasteId" }
+      responses:
+        "200":
+          description: |
+            Paste encontrado. Si `visibility=password` y quien pregunta
+            no es el dueño, se omite `content` y se añade `locked: true`.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Paste" }
+        "403": { description: "Paste privado (no eres el dueño)", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "404": { description: "No existe", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "410": { description: "Caducado (y no eres el dueño)", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+
+    patch:
+      tags: [Pastes]
+      summary: Editar un paste propio
+      description: Requiere ser el dueño. Todos los campos son opcionales; solo se actualizan los presentes.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PasteUpdateRequest" }
+      parameters:
+        - { $ref: "#/components/parameters/PasteId" }
+      responses:
+        "200":
+          description: Paste actualizado (devuelve el paste completo)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Paste" }
+        "400": { description: "Contenido vacío", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "404": { description: "No existe o no es tuyo", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "413": { description: "Contenido supera el límite de tamaño del tier", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+
+    delete:
+      tags: [Pastes]
+      summary: Borrar un paste propio
+      parameters:
+        - { $ref: "#/components/parameters/PasteId" }
+      responses:
+        "200":
+          description: Borrado
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  deleted: { type: boolean, example: true }
+        "404": { description: "No existe o no es tuyo", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+
+  /api/pastes/{id}/unlock:
+    post:
+      tags: [Pastes]
+      summary: Desbloquear un paste protegido con contraseña
+      security: []
+      parameters:
+        - { $ref: "#/components/parameters/PasteId" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [password]
+              properties:
+                password: { type: string }
+      responses:
+        "200":
+          description: Contraseña correcta — devuelve el paste completo
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Paste" }
+        "400": { description: "El paste no está protegido con contraseña", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "403": { description: "Contraseña incorrecta", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "404": { description: "No existe", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "410": { description: "Caducado", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+
+  /raw/{id}:
+    get:
+      tags: [Misc]
+      summary: Contenido del paste en texto plano
+      description: Mismas reglas de visibilidad/caducidad que `GET /api/pastes/{id}`, pero devuelve `text/plain` sin envolver en JSON. No sirve pastes protegidos con contraseña a terceros.
+      security: []
+      parameters:
+        - { $ref: "#/components/parameters/PasteId" }
+      responses:
+        "200":
+          description: Contenido en texto plano
+          content:
+            text/plain:
+              schema: { type: string }
+        "403": { description: "Privado o protegido con contraseña (no eres el dueño)" }
+        "404": { description: "No existe" }
+        "410": { description: "Caducado (y no eres el dueño)" }
+
+  /api/folders:
+    get:
+      tags: [Folders]
+      summary: Listar las carpetas propias
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  folders: { type: array, items: { $ref: "#/components/schemas/Folder" } }
+        "401": { description: "No autenticado", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+
+    post:
+      tags: [Folders]
+      summary: Crear una carpeta
+      description: Requiere cuenta registrada o Pro (`canUseFolders`).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name:     { type: string }
+                parentId: { type: string, nullable: true }
+                color:    { type: string, example: "#6366f1" }
+      responses:
+        "201":
+          description: Carpeta creada
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Folder" }
+        "400": { description: "Falta el nombre", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "403": { description: "El tier no permite carpetas", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+
+  /api/folders/{id}:
+    patch:
+      tags: [Folders]
+      summary: Renombrar o recolorear una carpeta propia
+      parameters:
+        - { $ref: "#/components/parameters/FolderId" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:  { type: string }
+                color: { type: string }
+      responses:
+        "200":
+          description: Actualizado
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  updated: { type: boolean, example: true }
+        "404": { description: "No existe o no es tuya", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+
+    delete:
+      tags: [Folders]
+      summary: Borrar una carpeta propia
+      description: Los pastes que contenía no se borran, quedan sin carpeta (folderId=null).
+      parameters:
+        - { $ref: "#/components/parameters/FolderId" }
+      responses:
+        "200":
+          description: Borrada
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  deleted: { type: boolean, example: true }
+        "404": { description: "No existe o no es tuya", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+
+components:
+  securitySchemes:
+    cookieAuth:
+      type: apiKey
+      in: cookie
+      name: pp_session
+      description: Cookie httpOnly, Secure, SameSite=Lax, fijada por sign-up/sign-in. 30 días de validez.
+
+  parameters:
+    PasteId:
+      name: id
+      in: path
+      required: true
+      schema: { type: string }
+      example: aB3dE9fG
+    FolderId:
+      name: id
+      in: path
+      required: true
+      schema: { type: string }
+
+  schemas:
+    Error:
+      type: object
+      properties:
+        error:  { type: string }
+        detail: { type: string, description: "Solo presente cuando ENVIRONMENT != production" }
+      required: [error]
+
+    Tier:
+      type: string
+      enum: [anon, registered, pro]
+
+    User:
+      type: object
+      properties:
+        id:           { type: string }
+        email:        { type: string, format: email }
+        name:         { type: string, nullable: true }
+        role:         { type: string, enum: [registered, pro, admin] }
+        proExpiresAt: { type: integer, nullable: true, description: "Timestamp unix; null si no es pro o es admin" }
+
+    Paste:
+      type: object
+      properties:
+        id:          { type: string }
+        userId:      { type: string, nullable: true }
+        folderId:    { type: string, nullable: true }
+        title:       { type: string }
+        content:     { type: string, description: "Ausente si el paste está protegido con contraseña y no lo has desbloqueado" }
+        language:    { type: string, example: javascript }
+        visibility:  { type: string, enum: [public, private, password] }
+        expiresAt:   { type: integer, nullable: true }
+        views:       { type: integer }
+        isArchived:  { type: boolean }
+        hasPassword: { type: boolean }
+        locked:      { type: boolean, description: "true si visibility=password y el contenido no se ha incluido" }
+        createdAt:   { type: integer }
+        updatedAt:   { type: integer }
+
+    PasteCreateRequest:
+      type: object
+      required: [content]
+      properties:
+        title:      { type: string, maxLength: 255, default: Untitled }
+        content:    { type: string, minLength: 1 }
+        language:   { type: string, maxLength: 50, default: plaintext }
+        visibility: { type: string, enum: [public, private, password], default: public }
+        password:   { type: string, minLength: 4, maxLength: 128, description: "Requerida si visibility=password" }
+        expiry:     { type: string, enum: ["1h", "3d", "30d", "90d", "300d", "never"], default: "3d" }
+        folderId:   { type: string }
+
+    PasteUpdateRequest:
+      type: object
+      description: Todos los campos son opcionales; solo se aplican los presentes.
+      properties:
+        title:    { type: string }
+        folderId: { type: string, nullable: true }
+        content:  { type: string, minLength: 1 }
+        language: { type: string }
+
+    Folder:
+      type: object
+      properties:
+        id:        { type: string }
+        userId:    { type: string }
+        parentId:  { type: string, nullable: true }
+        name:      { type: string }
+        slug:      { type: string }
+        color:     { type: string, example: "#6366f1" }
+        createdAt: { type: integer }
+        updatedAt: { type: integer }
