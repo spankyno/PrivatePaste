@@ -194,6 +194,74 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
 
+  /api/auth/verify-email:
+    post:
+      tags: [Auth]
+      summary: Consumir el token de verificación de email
+      description: |
+        Al registrarse se envía un email (vía Resend) con un enlace a
+        `/verify-email?token=...`; el frontend llama a este endpoint con
+        ese token. El token es de un solo uso y caduca a las 24h.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token]
+              properties:
+                token: { type: string }
+      responses:
+        "200":
+          description: Email verificado
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+        "400":
+          description: Token ausente, inválido, caducado o ya usado
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "429":
+          description: Rate limit de autenticación excedido
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /api/auth/resend-verification:
+    post:
+      tags: [Auth]
+      summary: Reenviar el email de verificación
+      description: Invalida cualquier token anterior de la cuenta antes de emitir uno nuevo.
+      responses:
+        "200":
+          description: Email reenviado
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+        "400":
+          description: El email ya estaba verificado
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "401":
+          description: No autenticado
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "429":
+          description: Rate limit de autenticación excedido
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
   /api/auth/session:
     get:
       tags: [Auth]
@@ -521,11 +589,12 @@ components:
     User:
       type: object
       properties:
-        id:           { type: string }
-        email:        { type: string, format: email }
-        name:         { type: string, nullable: true }
-        role:         { type: string, enum: [registered, pro, admin] }
-        proExpiresAt: { type: integer, nullable: true, description: "Timestamp unix; null si no es pro o es admin" }
+        id:              { type: string }
+        email:           { type: string, format: email }
+        name:            { type: string, nullable: true }
+        role:            { type: string, enum: [registered, pro, admin] }
+        proExpiresAt:    { type: integer, nullable: true, description: "Timestamp unix; null si no es pro o es admin" }
+        emailVerifiedAt: { type: integer, nullable: true, description: "Timestamp unix; null si el email no está verificado. Mientras sea null, el tier efectivo se limita a 'anon' (salvo admin)." }
 
     Paste:
       type: object
