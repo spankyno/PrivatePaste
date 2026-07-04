@@ -1,5 +1,5 @@
 import { BrowserRouter, Routes, Route } from 'react-router-dom'
-import { AuthProvider } from '@/hooks/useAuth'
+import { AuthProvider, useAuth } from '@/hooks/useAuth'
 import { Navbar } from '@/components/layout/Navbar'
 import { EmailVerificationBanner } from '@/components/layout/EmailVerificationBanner'
 import { Footer } from '@/components/layout/Footer'
@@ -9,6 +9,26 @@ import { AuthPage }        from '@/pages/Auth'
 import { VerifyEmailPage } from '@/pages/VerifyEmail'
 import { DashboardPage }   from '@/pages/Dashboard'
 import { AboutPage }       from '@/pages/About'
+import { Loader2 } from 'lucide-react'
+
+/**
+ * Vista de "/". Con sesión iniciada, la vista por defecto de la app es
+ * el Dashboard. Sin sesión, se mantiene el formulario de creación de
+ * paste — es el flujo anónimo (sin cuenta) que es el punto de entrada
+ * principal para visitantes nuevos, y el Dashboard no les serviría de
+ * nada (no tienen pastes propios que listar).
+ */
+function HomeRoute() {
+  const { user, loading } = useAuth()
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center min-h-[60vh]">
+        <Loader2 className="w-6 h-6 animate-spin text-[var(--text-faint)]" />
+      </div>
+    )
+  }
+  return user ? <DashboardPage /> : <CreatePastePage />
+}
 
 export default function App() {
   return (
@@ -19,7 +39,8 @@ export default function App() {
           <EmailVerificationBanner />
           <main className="flex-1">
             <Routes>
-              <Route path="/"          element={<CreatePastePage />} />
+              <Route path="/"          element={<HomeRoute />} />
+              <Route path="/new"       element={<CreatePastePage />} />
               <Route path="/p/:id"     element={<ViewPastePage />} />
               <Route path="/auth"          element={<AuthPage />} />
               <Route path="/verify-email"  element={<VerifyEmailPage />} />
