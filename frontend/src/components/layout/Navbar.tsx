@@ -1,5 +1,5 @@
 import { Link, useNavigate } from 'react-router-dom'
-import { Moon, Sun, Plus, LogIn, LogOut, User, ChevronDown, FileCode2 } from 'lucide-react'
+import { Moon, Sun, Plus, LogIn, LogOut, User, ChevronDown, FileCode2, LayoutDashboard } from 'lucide-react'
 import { useState } from 'react'
 import { useDarkMode } from '@/hooks/useDarkMode'
 import { useAuth } from '@/hooks/useAuth'
@@ -31,15 +31,23 @@ export function Navbar() {
       <nav className="max-w-6xl mx-auto px-4 h-14 flex items-center gap-4">
         {/* Logo */}
         <Link
-        to={user ? '/dashboard' : '/'}
+        to="/"
         className="flex items-center gap-2 font-semibold text-[var(--text)] hover:opacity-80 transition-opacity mr-2"
         >
         <FileCode2 className="w-5 h-5 text-brand-600 dark:text-brand-400" />
         <span className="hidden sm:inline">PrivatePaste</span>
         </Link>
 
+        {/* Dashboard button — solo con sesión iniciada */}
+        {user && (
+          <Link to="/dashboard" className="btn-secondary text-xs sm:text-sm py-1.5 px-3">
+            <LayoutDashboard className="w-4 h-4" />
+            <span className="hidden sm:inline">Dashboard</span>
+          </Link>
+        )}
+
         {/* New paste button */}
-        <Link to="/" className="btn-primary text-xs sm:text-sm py-1.5 px-3">
+        <Link to="/new" className="btn-primary text-xs sm:text-sm py-1.5 px-3">
           <Plus className="w-4 h-4" />
           <span className="hidden sm:inline">New paste</span>
         </Link>
