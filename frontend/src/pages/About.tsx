@@ -68,7 +68,7 @@ export function AboutPage() {
           Cloudflare. Comparte código y texto al instante, con control total sobre quién
           puede verlo y durante cuánto tiempo.
         </p>
-        <Link to="/" className="btn-primary mt-2">
+        <Link to="/new" className="btn-primary mt-2">
           <FileCode2 className="w-4 h-4" />
           Crear mi primer paste
         </Link>
@@ -178,7 +178,7 @@ export function AboutPage() {
       <div className="text-center flex flex-col items-center gap-3 py-4">
         <p className="text-sm text-[var(--text-muted)]">¿Listo para empezar?</p>
         <div className="flex gap-3">
-          <Link to="/" className="btn-primary">Crear paste</Link>
+          <Link to="/new" className="btn-primary">Crear paste</Link>
           <Link to="/auth" className="btn-secondary">Crear cuenta gratis</Link>
         </div>
       </div>

@@ -149,7 +149,7 @@ export function ViewPastePage() {
       <p className="text-4xl mb-4">🫥</p>
       <h1 className="text-xl font-semibold mb-2">Paste not found</h1>
       <p className="text-[var(--text-muted)] mb-6">{error}</p>
-      <Link to="/" className="btn-primary">Create new paste</Link>
+      <Link to="/new" className="btn-primary">Create new paste</Link>
     </div>
   )
 

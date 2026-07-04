@@ -73,7 +73,11 @@ export function CreatePastePage() {
 
     try {
       const { id } = await api.createPaste(payload)
-      navigate(`/p/${id}`)
+      // Con sesión, la nueva vista por defecto es el Dashboard (el paste
+      // recién creado aparece el primero en el listado). Sin sesión, el
+      // usuario no tiene dashboard al que volver — ver el paste
+      // directamente es la única forma de que se lleve el enlace.
+      navigate(user ? '/dashboard' : `/p/${id}`)
     } catch (err: any) {
       setError(err.message ?? 'Failed to create paste')
       setLoading(false)

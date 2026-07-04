@@ -225,7 +225,7 @@ export function DashboardPage() {
             {canUseFolders && <span className="hidden sm:inline"> · drag a paste onto a folder to move it</span>}
           </p>
         </div>
-        <Link to="/" className="btn-primary text-sm">
+        <Link to="/new" className="btn-primary text-sm">
           <Plus className="w-4 h-4" />
           New paste
         </Link>
@@ -344,7 +344,7 @@ export function DashboardPage() {
                 {query ? 'No results found' : showArchived ? 'No archived pastes' : 'No pastes yet'}
               </p>
               {!query && !showArchived && (
-                <Link to="/" className="btn-primary mt-4 inline-flex">Create your first paste</Link>
+                <Link to="/new" className="btn-primary mt-4 inline-flex">Create your first paste</Link>
               )}
             </div>
           ) : (
