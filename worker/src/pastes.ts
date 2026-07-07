@@ -23,6 +23,24 @@ function errJson(c: { env: { ENVIRONMENT: string } }, msg: string, err: unknown,
   return json({ error: msg, ...(isProd ? {} : { detail: String(err) }) }, status)
 }
 
+/** Fix 4: Anonimiza IP para cumplimiento GDPR.
+ *  IPv4: 192.168.1.100 → 192.168.1.0
+ *  IPv6: 2001:db8:85a3::1 → 2001:db8:85a3:0::
+ */
+function anonymizeIp(ip: string): string {
+  if (ip === 'unknown') return ip
+  if (ip.includes('.')) {
+    // IPv4 — borrar último octeto
+    const parts = ip.split('.')
+    if (parts.length === 4) return `${parts[0]}.${parts[1]}.${parts[2]}.0`
+  } else if (ip.includes(':')) {
+    // IPv6 — mantener primeros 4 grupos
+    const parts = ip.split(':')
+    return parts.slice(0, 4).join(':') + '::0'
+  }
+  return ip
+}
+
 // Convierte una fila de D1 (snake_case) al shape que espera el frontend (camelCase)
 function toCamelPaste(row: any) {
   return {
@@ -99,7 +117,9 @@ router.post('/', pasteCreationRateLimit, async (c) => {
     const tier   = c.get('tier')
     const userId = c.get('userId')
     const limits = TIER_LIMITS[tier]
-    const ip     = c.req.header('CF-Connecting-IP') ?? 'unknown'
+    const rawIp  = c.req.header('CF-Connecting-IP') ?? 'unknown'
+    // Fix 4: anonimizar IP — solo primeros 3 octetos (GDPR)
+    const ip     = anonymizeIp(rawIp)
 
     let body: z.infer<typeof CreateSchema>
     try { body = CreateSchema.parse(await c.req.json()) }
@@ -157,10 +177,20 @@ router.post('/', pasteCreationRateLimit, async (c) => {
 router.get('/', requireAuth, async (c) => {
   try {
     const userId   = c.get('userId')!
-    const q        = c.req.query('q')
+    const rawQ     = c.req.query('q')
     const folderId = c.req.query('folderId')
     const page     = Math.max(1, parseInt(c.req.query('page') ?? '1'))
     const limit    = Math.min(parseInt(c.req.query('limit') ?? '20'), 100)
+
+    // Fix 5: sanitizar query FTS5 — eliminar operadores especiales que causan 500
+    const q = rawQ
+      ? rawQ.trim().replace(/["'()*^:]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 200)
+      : undefined
+
+    if (rawQ !== undefined && !q) {
+      // La query quedó vacía tras sanitizar — devolver vacío sin consultar
+      return json({ pastes: [], page, limit })
+    }
     const offset   = (page - 1) * limit
 
     let rows: any[]

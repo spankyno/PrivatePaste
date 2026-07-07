@@ -16,9 +16,30 @@ const app = new Hono<{ Bindings: Env }>()
 const PRODUCTION_URL = 'https://privatepaste-production.YOUR_SUBDOMAIN.workers.dev'
 
 // ─── Middleware global ────────────────────────────────────────────────────────
-app.use('*', secureHeaders())
+// Fix 3: CSP explícita — secureHeaders() por defecto no la configura
+app.use('*', secureHeaders({
+  contentSecurityPolicy: {
+    defaultSrc:  ["'self'"],
+    scriptSrc:   ["'self'", "'unsafe-inline'"],   // necesario para el build de Vite
+    styleSrc:    ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
+    fontSrc:     ["'self'", 'https://fonts.gstatic.com'],
+    imgSrc:      ["'self'", 'data:'],
+    connectSrc:  ["'self'"],
+    frameSrc:    ["'none'"],
+    objectSrc:   ["'none'"],
+    baseUri:     ["'self'"],
+  },
+  xFrameOptions:         'DENY',
+  xContentTypeOptions:   'nosniff',
+  referrerPolicy:        'strict-origin-when-cross-origin',
+}))
 app.use('*', cors({
-  origin: ['http://localhost:5173', PRODUCTION_URL],
+  // Fix 2: localhost solo permitido en desarrollo
+  origin: (origin, c) => {
+    const env = (c.env as { ENVIRONMENT?: string }).ENVIRONMENT
+    if (env !== 'production' && origin === 'http://localhost:5173') return origin
+    return origin === PRODUCTION_URL ? origin : null
+  },
   allowMethods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
   allowHeaders: ['Content-Type', 'Authorization'],
   credentials: true,
@@ -100,6 +121,10 @@ app.post('/api/auth/sign-up/email', authRateLimit, async (c) => {
       return jsonRes({ error: 'Email and password required' }, 400)
     if (body.password.length < 8)
       return jsonRes({ error: 'Password must be at least 8 characters' }, 400)
+    // Fix 1: validar formato de email
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/
+    if (!emailRegex.test(body.email) || body.email.length > 254)
+      return jsonRes({ error: 'Invalid email format' }, 400)
 
     const db  = c.env.DB
     const now = Math.floor(Date.now() / 1000)
