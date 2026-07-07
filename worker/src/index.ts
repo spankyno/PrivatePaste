@@ -4,48 +4,19 @@ import { secureHeaders } from 'hono/secure-headers'
 import { logger } from 'hono/logger'
 import { nanoid } from 'nanoid'
 import type { Env } from './lib/types'
-import { authMiddleware, requireAuth } from './middleware/auth'
+import { authMiddleware } from './middleware/auth'
 import { rateLimitMiddleware, authRateLimit } from './middleware/rateLimit'
 import pastesRouter from './routes/pastes'
 import foldersRouter from './routes/folders'
 import { handleScheduled } from './cron'
-import { hashPassword, verifyPassword, needsRehash } from './lib/password'
-import { getProExpiresAt } from './lib/tiers'
-import { verifyTurnstile } from './lib/turnstile'
-import { sendEmail, verificationEmailHtml } from './lib/email'
-import { errorResponse } from './lib/http'
 
 const app = new Hono<{ Bindings: Env }>()
 
 // ⚠ Sustituye con tu URL real del Worker tras el primer deploy
-const PRODUCTION_URL = 'https://privatepaste-production.kbo1.workers.dev'
-
-// Red de seguridad: cualquier excepción no capturada por una ruta/middleware
-// (incluidas las que puedan lanzar Hono o sus propios middlewares) pasa por
-// aquí en lugar de devolver el stack trace por defecto al cliente.
-app.onError((err, c) => errorResponse(c, 'Internal server error', err, 500))
+const PRODUCTION_URL = 'https://privatepaste-production.YOUR_SUBDOMAIN.workers.dev'
 
 // ─── Middleware global ────────────────────────────────────────────────────────
-// CSP explícita (secureHeaders() no la activa por defecto). Ajustada al
-// frontend real: SPA servida desde el propio Worker (mismo origen), fuente
-// Google Fonts vía @import en index.css, sin scripts/estilos de terceros
-// ni iframes.
-app.use('*', secureHeaders({
-  contentSecurityPolicy: {
-    defaultSrc:     ["'self'"],
-    scriptSrc:      ["'self'", 'https://challenges.cloudflare.com'],
-    styleSrc:       ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
-    fontSrc:        ["'self'", 'https://fonts.gstatic.com'],
-    imgSrc:         ["'self'", 'data:'],
-    connectSrc:     ["'self'", 'https://challenges.cloudflare.com'],
-    frameSrc:       ['https://challenges.cloudflare.com'],
-    objectSrc:      ["'none'"],
-    baseUri:        ["'self'"],
-    formAction:     ["'self'"],
-    frameAncestors: ["'none'"],
-    upgradeInsecureRequests: [],
-  },
-}))
+app.use('*', secureHeaders())
 app.use('*', cors({
   origin: ['http://localhost:5173', PRODUCTION_URL],
   allowMethods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
@@ -55,13 +26,56 @@ app.use('*', cors({
 app.use('/api/*', logger())
 app.use('/api/*', authMiddleware)
 app.use('/api/*', rateLimitMiddleware)
-app.use('/raw/*', authMiddleware)
 
 // ─── Health ───────────────────────────────────────────────────────────────────
 app.get('/api/health', (c) => c.json({ ok: true, ts: Date.now() }))
 
 // ─── Auth helpers ─────────────────────────────────────────────────────────────
-// hashPassword/verifyPassword ahora viven en ./lib/password.ts (PBKDF2-SHA256)
+// ─── Crypto helpers — PBKDF2 (100k iter) + timing-safe compare ──────────────
+
+/** Convierte Uint8Array a hex string */
+function toHex(buf: ArrayBuffer): string {
+  return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('')
+}
+
+/** Comparación de strings en tiempo constante — evita timing attacks */
+function timingSafeEqual(a: string, b: string): boolean {
+  const ua = new TextEncoder().encode(a)
+  const ub = new TextEncoder().encode(b)
+  if (ua.length !== ub.length) return false
+  let diff = 0
+  for (let i = 0; i < ua.length; i++) diff |= (ua[i] ?? 0) ^ (ub[i] ?? 0)
+  return diff === 0
+}
+
+/** Hash de contraseña con PBKDF2-SHA256 (100.000 iteraciones) + salt aleatorio de 16 bytes */
+async function hashPw(password: string): Promise<string> {
+  const salt      = crypto.getRandomValues(new Uint8Array(16))
+  const saltHex   = toHex(salt.buffer)
+  const keyMat    = await crypto.subtle.importKey('raw', new TextEncoder().encode(password), 'PBKDF2', false, ['deriveBits'])
+  const bits      = await crypto.subtle.deriveBits({ name: 'PBKDF2', salt, iterations: 100_000, hash: 'SHA-256' }, keyMat, 256)
+  return `pbkdf2:${saltHex}:${toHex(bits)}`
+}
+
+/** Verifica contraseña — soporta el formato antiguo sha256 y el nuevo pbkdf2 */
+async function verifyPw(password: string, stored: string): Promise<boolean> {
+  if (stored.startsWith('pbkdf2:')) {
+    // Formato nuevo: pbkdf2:saltHex:hashHex
+    const parts   = stored.split(':')
+    const saltHex = parts[1] ?? ''
+    const hashHex = parts[2] ?? ''
+    const saltBuf = new Uint8Array(saltHex.match(/.{2}/g)!.map(h => parseInt(h, 16)))
+    const keyMat  = await crypto.subtle.importKey('raw', new TextEncoder().encode(password), 'PBKDF2', false, ['deriveBits'])
+    const bits    = await crypto.subtle.deriveBits({ name: 'PBKDF2', salt: saltBuf, iterations: 100_000, hash: 'SHA-256' }, keyMat, 256)
+    return timingSafeEqual(toHex(bits), hashHex)
+  }
+  // Formato antiguo sha256: saltHex:hashHex — comparación segura igualmente
+  const [salt, hash] = stored.split(':')
+  if (!salt || !hash) return false
+  const data    = new TextEncoder().encode(salt + password)
+  const newHash = await crypto.subtle.digest('SHA-256', data)
+  return timingSafeEqual(toHex(newHash), hash)
+}
 function setCookie(token: string, clear = false): string {
   return `pp_session=${clear ? '' : token}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${clear ? 0 : 2592000}`
 }
@@ -71,31 +85,17 @@ function jsonRes(data: unknown, status = 200, headers: Record<string, string> = 
   })
 }
 
+/** En producción, nunca exponer detalles internos de errores al cliente */
+function safeError(c: { env: { ENVIRONMENT: string } }, publicMsg: string, internalErr: unknown, status = 500) {
+  console.error(`[${publicMsg}]`, internalErr)
+  const isProd = c.env.ENVIRONMENT === 'production'
+  return jsonRes({ error: publicMsg, ...(isProd ? {} : { detail: String(internalErr) }) }, status)
+}
+
 // ─── POST /api/auth/sign-up/email ─────────────────────────────────────────────
 app.post('/api/auth/sign-up/email', authRateLimit, async (c) => {
   try {
-    const body = await c.req.json<{
-      email: string; password: string; name?: string
-      website?: string       // honeypot: campo invisible para humanos
-      turnstileToken?: string
-    }>()
-
-    // Honeypot: un bot que rellena formularios por fuerza bruta suele
-    // completar también los campos ocultos. Si viene relleno, se rechaza
-    // sin dar pistas de que se trata de un honeypot (mensaje genérico).
-    if (body.website) {
-      console.warn('[sign-up] blocked: honeypot field filled')
-      return jsonRes({ error: 'Invalid request' }, 400)
-    }
-
-    const turnstileOk = await verifyTurnstile(
-      body.turnstileToken,
-      c.env.TURNSTILE_SECRET_KEY,
-      c.req.header('CF-Connecting-IP'),
-    )
-    if (!turnstileOk)
-      return jsonRes({ error: 'Verification failed. Please try again.' }, 400)
-
+    const body = await c.req.json<{ email: string; password: string; name?: string }>()
     if (!body.email || !body.password)
       return jsonRes({ error: 'Email and password required' }, 400)
     if (body.password.length < 8)
@@ -118,7 +118,7 @@ app.post('/api/auth/sign-up/email', authRateLimit, async (c) => {
 
     await db.prepare(
       'INSERT INTO accounts (id, account_id, provider_id, user_id, password, created_at, updated_at) VALUES (?,?,?,?,?,?,?)'
-    ).bind(nanoid(), userId, 'email', userId, await hashPassword(body.password), now, now).run()
+    ).bind(nanoid(), userId, 'email', userId, await hashPw(body.password), now, now).run()
 
     await db.prepare(
       'INSERT INTO sessions (id, user_id, token, expires_at, ip_address, user_agent, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?)'
@@ -127,86 +127,12 @@ app.post('/api/auth/sign-up/email', authRateLimit, async (c) => {
       c.req.header('User-Agent') ?? null,
       now, now).run()
 
-    // Email de verificación (best-effort): no bloquea ni hace fallar el
-    // registro si Resend tarda o falla — la cuenta ya es utilizable de
-    // inmediato (con límites de tier anónimo hasta que se verifique, ver
-    // authMiddleware), y el usuario puede pedir que se reenvíe.
-    const verifyToken = nanoid(48)
-    await db.prepare(
-      'INSERT INTO verifications (id, identifier, value, expires_at, created_at, updated_at) VALUES (?,?,?,?,?,?)'
-    ).bind(nanoid(), body.email.toLowerCase(), verifyToken, now + 86400, now, now).run()
-
-    const verifyUrl = `${PRODUCTION_URL}/verify-email?token=${verifyToken}`
-    c.executionCtx.waitUntil(
-      sendEmail(c.env.RESEND_API_KEY, c.env.EMAIL_FROM, body.email.toLowerCase(),
-        'Verifica tu email en PrivatePaste', verificationEmailHtml(verifyUrl))
-    )
-
     return jsonRes(
-      { user: { id: userId, email: body.email.toLowerCase(), name: body.name ?? null, role: 'registered', emailVerifiedAt: null } },
+      { user: { id: userId, email: body.email.toLowerCase(), name: body.name ?? null, role: 'registered' } },
       201, { 'Set-Cookie': setCookie(token) }
     )
   } catch (err) {
-    return errorResponse(c, 'Registration failed', err)
-  }
-})
-
-// ─── POST /api/auth/verify-email ──────────────────────────────────────────────
-app.post('/api/auth/verify-email', authRateLimit, async (c) => {
-  try {
-    const { token } = await c.req.json<{ token?: string }>()
-    if (!token) return jsonRes({ error: 'Token required' }, 400)
-
-    const now = Math.floor(Date.now() / 1000)
-    const row = await c.env.DB.prepare(
-      'SELECT id, identifier FROM verifications WHERE value = ? AND expires_at > ? LIMIT 1'
-    ).bind(token, now).first<{ id: string; identifier: string }>()
-
-    if (!row) return jsonRes({ error: 'Invalid or expired verification link' }, 400)
-
-    await c.env.DB.prepare(
-      'UPDATE users SET email_verified_at = ?, updated_at = ? WHERE email = ?'
-    ).bind(now, now, row.identifier).run()
-
-    // Un solo uso: se borra en cuanto se consume.
-    await c.env.DB.prepare('DELETE FROM verifications WHERE id = ?').bind(row.id).run()
-
-    return jsonRes({ success: true })
-  } catch (err) {
-    return errorResponse(c, 'Verification failed', err)
-  }
-})
-
-// ─── POST /api/auth/resend-verification ───────────────────────────────────────
-app.post('/api/auth/resend-verification', requireAuth, authRateLimit, async (c) => {
-  try {
-    const userId = c.get('userId')!
-    const user = await c.env.DB.prepare(
-      'SELECT email, email_verified_at FROM users WHERE id = ?'
-    ).bind(userId).first<{ email: string; email_verified_at: number | null }>()
-
-    if (!user) return jsonRes({ error: 'User not found' }, 404)
-    if (user.email_verified_at) return jsonRes({ error: 'Email already verified' }, 400)
-
-    const now = Math.floor(Date.now() / 1000)
-    // Invalida cualquier token anterior de este email antes de emitir uno nuevo.
-    await c.env.DB.prepare('DELETE FROM verifications WHERE identifier = ?')
-      .bind(user.email.toLowerCase()).run()
-
-    const verifyToken = nanoid(48)
-    await c.env.DB.prepare(
-      'INSERT INTO verifications (id, identifier, value, expires_at, created_at, updated_at) VALUES (?,?,?,?,?,?)'
-    ).bind(nanoid(), user.email.toLowerCase(), verifyToken, now + 86400, now, now).run()
-
-    const verifyUrl = `${PRODUCTION_URL}/verify-email?token=${verifyToken}`
-    c.executionCtx.waitUntil(
-      sendEmail(c.env.RESEND_API_KEY, c.env.EMAIL_FROM, user.email,
-        'Verifica tu email en PrivatePaste', verificationEmailHtml(verifyUrl))
-    )
-
-    return jsonRes({ success: true })
-  } catch (err) {
-    return errorResponse(c, 'Failed to resend verification email', err)
+    return safeError(c, 'Registration failed', err)
   }
 })
 
@@ -228,16 +154,8 @@ app.post('/api/auth/sign-in/email', authRateLimit, async (c) => {
       .bind(user.id, 'email').first<{ password: string }>()
     if (!account?.password) return jsonRes({ error: 'Invalid email or password' }, 401)
 
-    if (!await verifyPassword(body.password, account.password))
+    if (!await verifyPw(body.password, account.password))
       return jsonRes({ error: 'Invalid email or password' }, 401)
-
-    // Migración transparente: si el hash guardado es del esquema antiguo
-    // (SHA-256 simple) o usa menos iteraciones que las actuales, se
-    // regenera con PBKDF2 ahora que tenemos la contraseña en texto plano.
-    if (needsRehash(account.password)) {
-      await db.prepare('UPDATE accounts SET password = ?, updated_at = ? WHERE user_id = ? AND provider_id = ?')
-        .bind(await hashPassword(body.password), now, user.id, 'email').run()
-    }
 
     const token = nanoid(32)
     const exp   = now + 2592000
@@ -250,11 +168,11 @@ app.post('/api/auth/sign-in/email', authRateLimit, async (c) => {
       now, now).run()
 
     return jsonRes(
-      { user: { id: user.id, email: user.email, name: user.name, role: user.role, emailVerifiedAt: user.email_verified_at } },
+      { user: { id: user.id, email: user.email, name: user.name, role: user.role } },
       200, { 'Set-Cookie': setCookie(token) }
     )
   } catch (err) {
-    return errorResponse(c, 'Login failed', err)
+    return safeError(c, 'Login failed', err)
   }
 })
 
@@ -268,54 +186,6 @@ app.post('/api/auth/sign-out', async (c) => {
   return jsonRes({ success: true }, 200, { 'Set-Cookie': setCookie('', true) })
 })
 
-// ─── POST /api/auth/change-password ───────────────────────────────────────────
-// Requiere sesión activa + contraseña actual. Tras el cambio, revoca todas
-// las demás sesiones del usuario (otros dispositivos/navegadores/tokens
-// robados) para que dejen de ser válidas de inmediato; solo la sesión
-// actual (con la que se hizo la petición) se mantiene viva.
-app.post('/api/auth/change-password', requireAuth, authRateLimit, async (c) => {
-  try {
-    const userId = c.get('userId')!
-    const body = await c.req.json<{ currentPassword: string; newPassword: string }>()
-
-    if (!body.currentPassword || !body.newPassword)
-      return jsonRes({ error: 'Current and new password are required' }, 400)
-    if (body.newPassword.length < 8)
-      return jsonRes({ error: 'New password must be at least 8 characters' }, 400)
-
-    const db  = c.env.DB
-    const now = Math.floor(Date.now() / 1000)
-
-    const account = await db.prepare(
-      'SELECT password FROM accounts WHERE user_id = ? AND provider_id = ?'
-    ).bind(userId, 'email').first<{ password: string }>()
-    if (!account?.password) return jsonRes({ error: 'Invalid current password' }, 401)
-
-    if (!await verifyPassword(body.currentPassword, account.password))
-      return jsonRes({ error: 'Invalid current password' }, 401)
-
-    await db.prepare(
-      'UPDATE accounts SET password = ?, updated_at = ? WHERE user_id = ? AND provider_id = ?'
-    ).bind(await hashPassword(body.newPassword), now, userId, 'email').run()
-
-    // Revoca todas las sesiones salvo la actual: cualquier token robado o
-    // sesión abierta en otro dispositivo antes del cambio deja de servir.
-    const currentToken = (c.req.header('Cookie') ?? '')
-      .match(/(?:^|;\s*)pp_session=([^;]+)/)?.[1]
-
-    if (currentToken) {
-      await db.prepare('DELETE FROM sessions WHERE user_id = ? AND token != ?')
-        .bind(userId, currentToken).run()
-    } else {
-      await db.prepare('DELETE FROM sessions WHERE user_id = ?').bind(userId).run()
-    }
-
-    return jsonRes({ success: true })
-  } catch (err) {
-    return errorResponse(c, 'Failed to change password', err)
-  }
-})
-
 // ─── GET /api/auth/session ────────────────────────────────────────────────────
 app.get('/api/auth/session', async (c) => {
   const cookie = c.req.header('Cookie') ?? ''
@@ -324,7 +194,7 @@ app.get('/api/auth/session', async (c) => {
 
   const now = Math.floor(Date.now() / 1000)
   const row = await c.env.DB.prepare(`
-    SELECT s.id as sid, s.expires_at, u.id, u.email, u.name, u.role, u.updated_at, u.email_verified_at
+    SELECT s.id as sid, s.expires_at, u.id, u.email, u.name, u.role
     FROM sessions s JOIN users u ON u.id = s.user_id
     WHERE s.token = ? LIMIT 1
   `).bind(token).first<any>()
@@ -332,11 +202,7 @@ app.get('/api/auth/session', async (c) => {
   if (!row || row.expires_at < now) return jsonRes({ session: null, user: null })
   return jsonRes({
     session: { id: row.sid, expiresAt: row.expires_at },
-    user:    {
-      id: row.id, email: row.email, name: row.name, role: row.role,
-      proExpiresAt: row.role === 'pro' ? getProExpiresAt(row.updated_at) : null,
-      emailVerifiedAt: row.email_verified_at,
-    },
+    user:    { id: row.id, email: row.email, name: row.name, role: row.role },
   })
 })
 
@@ -353,18 +219,15 @@ app.route('/api/folders', foldersRouter)
 
 // ─── Raw ──────────────────────────────────────────────────────────────────────
 app.get('/raw/:id', async (c) => {
-  const { id }    = c.req.param()
-  const now       = Math.floor(Date.now() / 1000)
-  const userId    = c.get('userId')
-  const paste     = await c.env.DB.prepare('SELECT * FROM pastes WHERE id = ?').bind(id).first<any>()
-  if (!paste) return c.text('Not found', 404)
-
-  const isOwner   = !!userId && paste.user_id === userId
-  const isExpired = paste.expires_at && paste.expires_at < now
-
-  if (isExpired && !isOwner)                          return c.text('Expired', 410)
-  if (paste.visibility === 'private' && !isOwner)      return c.text('Private', 403)
-  if (paste.visibility === 'password' && !isOwner)     return c.text('Password required', 403)
+  const { id } = c.req.param()
+  const now    = Math.floor(Date.now() / 1000)
+  const paste  = await c.env.DB.prepare('SELECT * FROM pastes WHERE id = ?').bind(id).first<any>()
+  if (!paste)                                     return c.text('Not found', 404)
+  if (paste.expires_at && paste.expires_at < now) return c.text('Expired', 410)
+  if (paste.visibility === 'private' && paste.user_id !== c.get('userId'))
+                                                  return c.text('Private', 403)
+  if (paste.visibility === 'password' && paste.user_id !== c.get('userId'))
+                                                  return c.text('Password required', 403)
   c.executionCtx.waitUntil(
     c.env.DB.prepare('UPDATE pastes SET views = views + 1 WHERE id = ?').bind(id).run()
   )
@@ -377,5 +240,4 @@ app.get('*', async (c) => {
   catch { return c.env.ASSETS.fetch(new Request(new URL('/index.html', c.req.url))) }
 })
 
-export { app }
 export default { fetch: app.fetch, scheduled: handleScheduled }
