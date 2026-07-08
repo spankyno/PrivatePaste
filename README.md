@@ -5,7 +5,7 @@ Pastebin moderno y privado desplegado en el edge de Cloudflare.
 
 ## Stack
 
-| Capa | Tecnología |
+| Capa | Tecnología | 
 |---|---|
 | Runtime | Cloudflare Workers |
 | Framework | Hono 4 |
