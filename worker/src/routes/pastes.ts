@@ -8,8 +8,6 @@ import type { Env } from '../lib/types'
 import { TIER_LIMITS, expiryToTimestamp } from '../lib/tiers'
 import { requireAuth } from '../middleware/auth'
 import { pasteCreationRateLimit } from '../middleware/rateLimit'
-import { hashPassword, verifyPassword, needsRehash } from '../lib/password'
-import { errorResponse } from '../lib/http'
 
 const router = new Hono<{ Bindings: Env }>()
 
@@ -17,6 +15,30 @@ function json(data: unknown, status = 200, headers: Record<string, string> = {})
   return new Response(JSON.stringify(data), {
     status, headers: { 'Content-Type': 'application/json', ...headers }
   })
+}
+
+function errJson(c: { env: { ENVIRONMENT: string } }, msg: string, err: unknown, status = 500) {
+  console.error(`[pastes] ${msg}`, err)
+  const isProd = c.env.ENVIRONMENT === 'production'
+  return json({ error: msg, ...(isProd ? {} : { detail: String(err) }) }, status)
+}
+
+/** Fix 4: Anonimiza IP para cumplimiento GDPR.
+ *  IPv4: 192.168.1.100 → 192.168.1.0
+ *  IPv6: 2001:db8:85a3::1 → 2001:db8:85a3:0::
+ */
+function anonymizeIp(ip: string): string {
+  if (ip === 'unknown') return ip
+  if (ip.includes('.')) {
+    // IPv4 — borrar último octeto
+    const parts = ip.split('.')
+    if (parts.length === 4) return `${parts[0]}.${parts[1]}.${parts[2]}.0`
+  } else if (ip.includes(':')) {
+    // IPv6 — mantener primeros 4 grupos
+    const parts = ip.split(':')
+    return parts.slice(0, 4).join(':') + '::0'
+  }
+  return ip
 }
 
 // Convierte una fila de D1 (snake_case) al shape que espera el frontend (camelCase)
@@ -38,7 +60,46 @@ function toCamelPaste(row: any) {
   }
 }
 
-// hashPassword/verifyPassword ahora viven en ../lib/password.ts (PBKDF2-SHA256)
+// ─── Crypto helpers — PBKDF2 (100k iter) + timing-safe compare ──────────────
+
+function toHex(buf: ArrayBuffer): string {
+  return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('')
+}
+
+function timingSafeEqual(a: string, b: string): boolean {
+  const ua = new TextEncoder().encode(a)
+  const ub = new TextEncoder().encode(b)
+  if (ua.length !== ub.length) return false
+  let diff = 0
+  for (let i = 0; i < ua.length; i++) diff |= (ua[i] ?? 0) ^ (ub[i] ?? 0)
+  return diff === 0
+}
+
+async function hashPassword(password: string): Promise<string> {
+  const salt    = crypto.getRandomValues(new Uint8Array(16))
+  const saltHex = toHex(salt.buffer)
+  const keyMat  = await crypto.subtle.importKey('raw', new TextEncoder().encode(password), 'PBKDF2', false, ['deriveBits'])
+  const bits    = await crypto.subtle.deriveBits({ name: 'PBKDF2', salt, iterations: 100_000, hash: 'SHA-256' }, keyMat, 256)
+  return `pbkdf2:${saltHex}:${toHex(bits)}`
+}
+
+async function verifyPassword(password: string, stored: string): Promise<boolean> {
+  if (stored.startsWith('pbkdf2:')) {
+    const parts   = stored.split(':')
+    const saltHex = parts[1] ?? ''
+    const hashHex = parts[2] ?? ''
+    const saltBuf = new Uint8Array(saltHex.match(/.{2}/g)!.map(h => parseInt(h, 16)))
+    const keyMat  = await crypto.subtle.importKey('raw', new TextEncoder().encode(password), 'PBKDF2', false, ['deriveBits'])
+    const bits    = await crypto.subtle.deriveBits({ name: 'PBKDF2', salt: saltBuf, iterations: 100_000, hash: 'SHA-256' }, keyMat, 256)
+    return timingSafeEqual(toHex(bits), hashHex)
+  }
+  // Soporte retrocompatible con hashes SHA-256 antiguos (formato salt:hex)
+  const [salt, hash] = stored.split(':')
+  if (!salt || !hash) return false
+  const data    = new TextEncoder().encode(salt + password)
+  const newHash = await crypto.subtle.digest('SHA-256', data)
+  return timingSafeEqual(toHex(newHash), hash)
+}
 
 const CreateSchema = z.object({
   title:      z.string().max(255).default('Untitled'),
@@ -56,7 +117,9 @@ router.post('/', pasteCreationRateLimit, async (c) => {
     const tier   = c.get('tier')
     const userId = c.get('userId')
     const limits = TIER_LIMITS[tier]
-    const ip     = c.req.header('CF-Connecting-IP') ?? 'unknown'
+    const rawIp  = c.req.header('CF-Connecting-IP') ?? 'unknown'
+    // Fix 4: anonimizar IP — solo primeros 3 octetos (GDPR)
+    const ip     = anonymizeIp(rawIp)
 
     let body: z.infer<typeof CreateSchema>
     try { body = CreateSchema.parse(await c.req.json()) }
@@ -89,7 +152,7 @@ router.post('/', pasteCreationRateLimit, async (c) => {
 
     const id        = nanoid(8)
     const now       = Math.floor(Date.now() / 1000)
-    const expiresAt = expiryToTimestamp(body.expiry)
+    const expiresAt = expiryToTimestamp(body.expiry as any)
 
     await c.env.DB.prepare(`
       INSERT INTO pastes
@@ -105,63 +168,68 @@ router.post('/', pasteCreationRateLimit, async (c) => {
 
     return json({ id, url: `/p/${id}` }, 201)
   } catch (err) {
-    return errorResponse(c, 'Failed to create paste', err)
+    console.error('[POST /pastes]', err)
+    return errJson(c, 'Failed to create paste', err)
+  }
+})
+
+// GET /api/pastes/stats — contador de pastes para el dashboard
+router.get('/stats', requireAuth, async (c) => {
+  try {
+    const userId = c.get('userId')!
+    const row = await c.env.DB.prepare(
+      'SELECT COUNT(*) as total FROM pastes WHERE user_id = ? AND is_archived = 0'
+    ).bind(userId).first<{ total: number }>()
+    return json({ total: row?.total ?? 0 })
+  } catch (err) {
+    return errJson(c, 'Failed to get stats', err)
   }
 })
 
 // GET /api/pastes (list own)
 router.get('/', requireAuth, async (c) => {
   try {
-    const userId    = c.get('userId')!
-    const q         = c.req.query('q')
-    const folderId  = c.req.query('folderId')
-    const page      = Math.max(1, parseInt(c.req.query('page') ?? '1'))
-    const limit     = Math.min(parseInt(c.req.query('limit') ?? '20'), 100)
-    const offset    = (page - 1) * limit
-    const now       = Math.floor(Date.now() / 1000)
+    const userId   = c.get('userId')!
+    const rawQ     = c.req.query('q')
+    const folderId = c.req.query('folderId')
+    const page     = Math.max(1, parseInt(c.req.query('page') ?? '1'))
+    const limit    = Math.min(parseInt(c.req.query('limit') ?? '20'), 100)
 
-    // Por defecto solo se listan los pastes activos. Los pastes PRO
-    // caducados se archivan (is_archived=1) en vez de borrarse, pero no
-    // deben aparecer en el listado principal — quedan disponibles aparte
-    // con ?archived=1 (el dueño puede seguir accediendo a su contenido).
-    //
-    // El cron que fija is_archived=1 solo corre una vez por hora, así que
-    // un paste puede llevar caducado un rato con is_archived aún en 0.
-    // Para no esperar a esa próxima pasada, la caducidad se comprueba
-    // también aquí en el momento de leer (misma idea que el downgrade
-    // perezoso de cuentas PRO): un paste cuenta como "archivado" en
-    // cuanto expires_at queda en el pasado, no solo cuando el cron lo
-    // marca físicamente.
-    const showArchived = c.req.query('archived') === '1'
-    const statusFilter = showArchived
-      ? '(p.is_archived = 1 OR (p.expires_at IS NOT NULL AND p.expires_at <= ?))'
-      : '(p.is_archived = 0 AND (p.expires_at IS NULL OR p.expires_at > ?))'
+    // Fix 5: sanitizar query FTS5 — eliminar operadores especiales que causan 500
+    const q = rawQ
+      ? rawQ.trim().replace(/["'()*^:]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 200)
+      : undefined
+
+    if (rawQ !== undefined && !q) {
+      // La query quedó vacía tras sanitizar — devolver vacío sin consultar
+      return json({ pastes: [], page, limit })
+    }
+    const offset   = (page - 1) * limit
 
     let rows: any[]
     if (q) {
       const fts = await c.env.DB.prepare(
         `SELECT p.* FROM pastes p
          INNER JOIN pastes_fts f ON f.id = p.id
-         WHERE f.pastes_fts MATCH ? AND p.user_id = ? AND ${statusFilter}
+         WHERE f.pastes_fts MATCH ? AND p.user_id = ?
          ORDER BY p.created_at DESC LIMIT ? OFFSET ?`
-      ).bind(q, userId, now, limit, offset).all()
+      ).bind(q, userId, limit, offset).all()
       rows = fts.results
     } else {
       const result = folderId
         ? await c.env.DB.prepare(
-            `SELECT p.* FROM pastes p WHERE p.user_id = ? AND p.folder_id = ? AND ${statusFilter}
-             ORDER BY p.created_at DESC LIMIT ? OFFSET ?`
-          ).bind(userId, folderId, now, limit, offset).all()
+            'SELECT * FROM pastes WHERE user_id = ? AND folder_id = ? ORDER BY created_at DESC LIMIT ? OFFSET ?'
+          ).bind(userId, folderId, limit, offset).all()
         : await c.env.DB.prepare(
-            `SELECT p.* FROM pastes p WHERE p.user_id = ? AND ${statusFilter}
-             ORDER BY p.created_at DESC LIMIT ? OFFSET ?`
-          ).bind(userId, now, limit, offset).all()
+            'SELECT * FROM pastes WHERE user_id = ? ORDER BY created_at DESC LIMIT ? OFFSET ?'
+          ).bind(userId, limit, offset).all()
       rows = result.results
     }
 
     return json({ pastes: rows.map(toCamelPaste), page, limit })
   } catch (err) {
-    return errorResponse(c, 'Failed to list pastes', err)
+    console.error('[GET /pastes]', err)
+    return errJson(c, 'Internal error', err)
   }
 })
 
@@ -175,17 +243,10 @@ router.get('/:id', async (c) => {
     const paste = await c.env.DB.prepare('SELECT * FROM pastes WHERE id = ?').bind(id).first<any>()
 
     if (!paste) return json({ error: 'Paste not found' }, 404)
-
-    const isOwner   = !!userId && paste.user_id === userId
-    const isExpired = paste.expires_at && paste.expires_at < now
-
-    // Un paste caducado (archivado para cuentas PRO/admin) deja de ser
-    // públicamente accesible, pero el dueño puede seguir consultando su
-    // contenido — solo se bloquea a terceros.
-    if (isExpired && !isOwner) return json({ error: 'Paste has expired' }, 410)
-    if (paste.visibility === 'private' && !isOwner)
+    if (paste.expires_at && paste.expires_at < now) return json({ error: 'Paste has expired' }, 410)
+    if (paste.visibility === 'private' && paste.user_id !== userId)
       return json({ error: 'This paste is private' }, 403)
-    if (paste.visibility === 'password' && !isOwner) {
+    if (paste.visibility === 'password' && paste.user_id !== userId) {
       const safe = toCamelPaste(paste)
       return json({ ...safe, content: undefined, locked: true })
     }
@@ -195,7 +256,8 @@ router.get('/:id', async (c) => {
     )
     return json(toCamelPaste(paste))
   } catch (err) {
-    return errorResponse(c, 'Failed to retrieve paste', err)
+    console.error('[GET /pastes/:id]', err)
+    return errJson(c, 'Internal error', err)
   }
 })
 
@@ -215,24 +277,16 @@ router.post('/:id/unlock', async (c) => {
     const ok = await verifyPassword(password, paste.password_hash)
     if (!ok) return json({ error: 'Incorrect password' }, 403)
 
-    // Migración transparente del hash legacy (SHA-256) a PBKDF2
-    if (needsRehash(paste.password_hash)) {
-      c.executionCtx.waitUntil(
-        c.env.DB.prepare('UPDATE pastes SET password_hash = ? WHERE id = ?')
-          .bind(await hashPassword(password), id).run()
-      )
-    }
-
     c.executionCtx.waitUntil(
       c.env.DB.prepare('UPDATE pastes SET views = views + 1 WHERE id = ?').bind(id).run()
     )
     return json(toCamelPaste(paste))
   } catch (err) {
-    return errorResponse(c, 'Failed to unlock paste', err)
+    return errJson(c, 'Internal error', err)
   }
 })
 
-// PATCH /api/pastes/:id
+// PATCH /api/pastes/:id — edición completa
 router.patch('/:id', requireAuth, async (c) => {
   try {
     const { id }  = c.req.param()
@@ -241,44 +295,72 @@ router.patch('/:id', requireAuth, async (c) => {
     const limits  = TIER_LIMITS[tier]
 
     const existing = await c.env.DB.prepare(
-      'SELECT id FROM pastes WHERE id = ? AND user_id = ?'
-    ).bind(id, userId).first()
+      'SELECT * FROM pastes WHERE id = ? AND user_id = ?'
+    ).bind(id, userId).first<any>()
     if (!existing) return json({ error: 'Not found or not yours' }, 404)
 
     const body = await c.req.json<{
-      title?: string
-      folderId?: string | null
-      content?: string
-      language?: string
+      title?:      string
+      content?:    string
+      language?:   string
+      visibility?: string
+      password?:   string
+      expiry?:     string
+      folderId?:   string | null
     }>()
-    const now  = Math.floor(Date.now() / 1000)
+    const now = Math.floor(Date.now() / 1000)
 
+    // Validar tamaño si viene content nuevo
     if (body.content !== undefined) {
-      if (!body.content.trim())
-        return json({ error: 'Content cannot be empty' }, 400)
       const bytes = new TextEncoder().encode(body.content).length
       if (bytes > limits.maxPasteSizeBytes)
         return json({ error: `Content too large. Limit: ${Math.round(limits.maxPasteSizeBytes / 1024)}KB` }, 413)
-      await c.env.DB.prepare('UPDATE pastes SET content = ?, updated_at = ? WHERE id = ?')
-        .bind(body.content, now, id).run()
-    }
-    if (body.language !== undefined) {
-      await c.env.DB.prepare('UPDATE pastes SET language = ?, updated_at = ? WHERE id = ?')
-        .bind(body.language, now, id).run()
-    }
-    if (body.title !== undefined) {
-      await c.env.DB.prepare('UPDATE pastes SET title = ?, updated_at = ? WHERE id = ?')
-        .bind(body.title, now, id).run()
-    }
-    if (body.folderId !== undefined) {
-      await c.env.DB.prepare('UPDATE pastes SET folder_id = ?, updated_at = ? WHERE id = ?')
-        .bind(body.folderId, now, id).run()
+      if (!body.content.trim())
+        return json({ error: 'Content cannot be empty' }, 400)
     }
 
-    const updated = await c.env.DB.prepare('SELECT * FROM pastes WHERE id = ?').bind(id).first<any>()
-    return json(toCamelPaste(updated))
+    // Validar visibilidad
+    if (body.visibility === 'private' && !userId)
+      return json({ error: 'Private pastes require an account' }, 403)
+    if (body.visibility === 'password' && !limits.canUsePassword)
+      return json({ error: 'Password pastes require an account' }, 403)
+
+    // Calcular nuevo password_hash si cambia visibilidad a password
+    let passwordHash: string | null | undefined = undefined
+    if (body.visibility === 'password' && body.password) {
+      passwordHash = await hashPassword(body.password)
+    } else if (body.visibility && body.visibility !== 'password') {
+      passwordHash = null  // limpiar hash si deja de ser protegido
+    }
+
+    // Calcular nuevo expires_at si cambia expiry
+    let expiresAt: number | null | undefined = undefined
+    if (body.expiry !== undefined) {
+      if (body.expiry === 'never' && !limits.canSetNeverExpire)
+        return json({ error: 'Never-expiring pastes require Pro' }, 403)
+      expiresAt = expiryToTimestamp(body.expiry)
+    }
+
+    // Construir UPDATE dinámico
+    const fields: string[] = ['updated_at = ?']
+    const values: any[]    = [now]
+
+    if (body.title      !== undefined) { fields.push('title = ?');        values.push(body.title) }
+    if (body.content    !== undefined) { fields.push('content = ?');      values.push(body.content) }
+    if (body.language   !== undefined) { fields.push('language = ?');     values.push(body.language) }
+    if (body.visibility !== undefined) { fields.push('visibility = ?');   values.push(body.visibility) }
+    if (passwordHash    !== undefined) { fields.push('password_hash = ?');values.push(passwordHash) }
+    if (expiresAt       !== undefined) { fields.push('expires_at = ?');   values.push(expiresAt) }
+    if (body.folderId   !== undefined) { fields.push('folder_id = ?');    values.push(body.folderId) }
+
+    values.push(id)
+    await c.env.DB.prepare(
+      `UPDATE pastes SET ${fields.join(', ')} WHERE id = ?`
+    ).bind(...values).run()
+
+    return json({ updated: true })
   } catch (err) {
-    return errorResponse(c, 'Failed to update paste', err)
+    return errJson(c, 'Failed to update paste', err)
   }
 })
 
@@ -294,7 +376,7 @@ router.delete('/:id', requireAuth, async (c) => {
     await c.env.DB.prepare('DELETE FROM pastes WHERE id = ?').bind(id).run()
     return json({ deleted: true })
   } catch (err) {
-    return errorResponse(c, 'Failed to delete paste', err)
+    return errJson(c, 'Internal error', err)
   }
 })
 
