@@ -2,15 +2,14 @@
  * CreatePaste page — the main editor.
  * Accessible to all tiers; options adapt based on auth state.
  */
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import ReactCodeMirror from '@uiw/react-codemirror'
 import { oneDark } from '@codemirror/theme-one-dark'
 import { Lock, Eye, EyeOff, Globe, Clock, FolderOpen, Loader2, Copy, Check } from 'lucide-react'
 import { useAuth } from '@/hooks/useAuth'
 import { useDarkMode } from '@/hooks/useDarkMode'
-import { useDocumentHead } from '@/hooks/useDocumentHead'
-import { api, type PastePayload } from '@/lib/api'
+import { api, type PastePayload, type Folder } from '@/lib/api'
 import { LANGUAGES, getLanguage } from '@/lib/languages'
 import { TIER_LIMITS, EXPIRY_OPTIONS } from '@/lib/tiers'
 import clsx from 'clsx'
@@ -21,7 +20,6 @@ import clsx from 'clsx'
 type Visibility = 'public' | 'private' | 'password'
 
 export function CreatePastePage() {
-  useDocumentHead({ title: 'Comparte código online de forma privada' })
   const { user, tier }  = useAuth()
   const { dark }        = useDarkMode()
   const navigate        = useNavigate()
@@ -34,11 +32,20 @@ export function CreatePastePage() {
   const [visibility, setVisibility] = useState<Visibility>('public')
   const [password,   setPassword]   = useState('')
   const [expiry,     setExpiry]     = useState<string>(tier === 'anon' ? '3d' : '30d')
+  const [folderId,   setFolderId]   = useState<string>('')
+  const [folders,    setFolders]    = useState<Folder[]>([])
 
   // UI state
   const [loading,    setLoading]    = useState(false)
   const [error,      setError]      = useState<string | null>(null)
   const [langExt,    setLangExt]    = useState<any>([])
+
+  // Cargar carpetas si el usuario puede usarlas
+  useEffect(() => {
+    if (user && limits.canUseFolders) {
+      api.listFolders().then(r => setFolders(r.folders)).catch(() => {})
+    }
+  }, [user, limits.canUseFolders])
 
   // Load language extension when selected
   const handleLangChange = useCallback(async (id: string) => {
@@ -68,16 +75,13 @@ export function CreatePastePage() {
       language,
       visibility: user ? visibility : 'public',
       expiry:     expiry as PastePayload['expiry'],
+      ...(folderId ? { folderId } : {}),
     }
     if (visibility === 'password' && password) payload.password = password
 
     try {
       const { id } = await api.createPaste(payload)
-      // Con sesión, la nueva vista por defecto es el Dashboard (el paste
-      // recién creado aparece el primero en el listado). Sin sesión, el
-      // usuario no tiene dashboard al que volver — ver el paste
-      // directamente es la única forma de que se lleve el enlace.
-      navigate(user ? '/dashboard' : `/p/${id}`)
+      navigate(`/p/${id}`)
     } catch (err: any) {
       setError(err.message ?? 'Failed to create paste')
       setLoading(false)
@@ -212,6 +216,25 @@ export function CreatePastePage() {
             ))}
           </select>
         </div>
+
+        {/* Folder selector — solo para usuarios con carpetas */}
+        {user && limits.canUseFolders && folders.length > 0 && (
+          <div className="flex flex-col gap-1">
+            <label className="text-xs text-[var(--text-muted)] font-medium uppercase tracking-wide flex items-center gap-1">
+              <FolderOpen className="w-3 h-3" /> Folder
+            </label>
+            <select
+              value={folderId}
+              onChange={e => setFolderId(e.target.value)}
+              className="input w-44 text-sm"
+            >
+              <option value="">No folder</option>
+              {folders.map(f => (
+                <option key={f.id} value={f.id}>{f.name}</option>
+              ))}
+            </select>
+          </div>
+        )}
 
         <div className="flex-1" />
 
