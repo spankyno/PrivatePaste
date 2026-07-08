@@ -31,12 +31,10 @@ export interface Paste {
 }
 
 export interface ApiUser {
-  id:              string
-  email:           string
-  name:            string | null
-  role:            'registered' | 'pro' | 'admin'
-  proExpiresAt:    number | null
-  emailVerifiedAt: number | null
+  id:    string
+  email: string
+  name:  string | null
+  role:  'registered' | 'pro' | 'admin'
 }
 
 export interface SessionResponse {
@@ -80,10 +78,10 @@ export const api = {
   me: () => apiFetch<SessionResponse>('/api/me'),
 
   // ── Auth ──────────────────────────────────────────────────────────────────
-  signUp: (email: string, password: string, name?: string, turnstileToken?: string, website?: string) =>
+  signUp: (email: string, password: string, name?: string) =>
     apiFetch('/api/auth/sign-up/email', {
       method: 'POST',
-      body: JSON.stringify({ email, password, name, turnstileToken, website }),
+      body: JSON.stringify({ email, password, name }),
     }),
 
   signIn: (email: string, password: string) =>
@@ -94,15 +92,6 @@ export const api = {
 
   signOut: () =>
     apiFetch('/api/auth/sign-out', { method: 'POST' }),
-
-  verifyEmail: (token: string) =>
-    apiFetch<{ success: boolean }>('/api/auth/verify-email', {
-      method: 'POST',
-      body: JSON.stringify({ token }),
-    }),
-
-  resendVerification: () =>
-    apiFetch<{ success: boolean }>('/api/auth/resend-verification', { method: 'POST' }),
 
   // ── Pastes ────────────────────────────────────────────────────────────────
   createPaste: (payload: PastePayload) =>
@@ -120,20 +109,30 @@ export const api = {
       body: JSON.stringify({ password }),
     }),
 
-  listPastes: (params?: { q?: string; folderId?: string; page?: number; archived?: boolean }) => {
+  listPastes: (params?: { q?: string; folderId?: string; page?: number }) => {
     const qs = new URLSearchParams()
     if (params?.q)        qs.set('q', params.q)
     if (params?.folderId) qs.set('folderId', params.folderId)
     if (params?.page)     qs.set('page', String(params.page))
-    if (params?.archived) qs.set('archived', '1')
-    return apiFetch<{ pastes: Paste[]; page: number; limit: number; hasMore: boolean }>(`/api/pastes?${qs}`)
+    return apiFetch<{ pastes: Paste[]; page: number; limit: number }>(`/api/pastes?${qs}`)
   },
 
   deletePaste: (id: string) =>
     apiFetch(`/api/pastes/${id}`, { method: 'DELETE' }),
 
-  updatePaste: (id: string, data: { title?: string; folderId?: string | null; content?: string; language?: string }) =>
-    apiFetch<Paste>(`/api/pastes/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+  updatePaste: (id: string, data: {
+    title?:      string
+    content?:    string
+    language?:   string
+    visibility?: 'public' | 'private' | 'password'
+    password?:   string
+    expiry?:     string
+    folderId?:   string | null
+  }) =>
+    apiFetch(`/api/pastes/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+
+  getPasteStats: () =>
+    apiFetch<{ total: number }>('/api/pastes/stats'),
 
   // ── Folders ───────────────────────────────────────────────────────────────
   listFolders: () =>
