@@ -250,6 +250,8 @@ router.patch('/:id', requireAuth, async (c) => {
       folderId?: string | null
       content?: string
       language?: string
+      visibility?: 'public' | 'private' | 'password'
+      password?: string
     }>()
     const now  = Math.floor(Date.now() / 1000)
 
@@ -273,6 +275,48 @@ router.patch('/:id', requireAuth, async (c) => {
     if (body.folderId !== undefined) {
       await c.env.DB.prepare('UPDATE pastes SET folder_id = ?, updated_at = ? WHERE id = ?')
         .bind(body.folderId, now, id).run()
+    }
+    if (body.visibility !== undefined) {
+      if (!['public', 'private', 'password'].includes(body.visibility)) {
+        return json({ error: 'Invalid visibility' }, 400)
+      }
+      if (body.visibility === 'password' && !limits.canUsePassword) {
+        return json({ error: 'Password protected pastes are not supported for your tier' }, 403)
+      }
+      if (body.password !== undefined && (body.password.length < 4 || body.password.length > 128)) {
+        return json({ error: 'Password must be between 4 and 128 characters' }, 400)
+      }
+
+      let passwordHash: string | null = null
+      if (body.visibility === 'password') {
+        if (body.password) {
+          passwordHash = await hashPassword(body.password)
+        } else {
+          const current = await c.env.DB.prepare(
+            'SELECT password_hash FROM pastes WHERE id = ?'
+          ).bind(id).first<{ password_hash: string | null }>()
+          if (!current?.password_hash) {
+            return json({ error: 'Password required when setting visibility to password' }, 400)
+          }
+          passwordHash = current.password_hash
+        }
+      }
+
+      await c.env.DB.prepare('UPDATE pastes SET visibility = ?, password_hash = ?, updated_at = ? WHERE id = ?')
+        .bind(body.visibility, passwordHash, now, id).run()
+    } else if (body.password !== undefined) {
+      if (body.password.length < 4 || body.password.length > 128) {
+        return json({ error: 'Password must be between 4 and 128 characters' }, 400)
+      }
+      const current = await c.env.DB.prepare(
+        'SELECT visibility FROM pastes WHERE id = ?'
+      ).bind(id).first<{ visibility: string }>()
+      if (current?.visibility !== 'password') {
+        return json({ error: 'Cannot set password on non-password protected paste' }, 400)
+      }
+      const passwordHash = await hashPassword(body.password)
+      await c.env.DB.prepare('UPDATE pastes SET password_hash = ?, updated_at = ? WHERE id = ?')
+        .bind(passwordHash, now, id).run()
     }
 
     const updated = await c.env.DB.prepare('SELECT * FROM pastes WHERE id = ?').bind(id).first<any>()
