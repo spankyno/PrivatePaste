@@ -252,6 +252,7 @@ router.patch('/:id', requireAuth, async (c) => {
       language?: string
       visibility?: 'public' | 'private' | 'password'
       password?: string
+      expiry?: '1h' | '3d' | '30d' | '90d' | '300d' | 'never'
     }>()
     const now  = Math.floor(Date.now() / 1000)
 
@@ -317,6 +318,17 @@ router.patch('/:id', requireAuth, async (c) => {
       const passwordHash = await hashPassword(body.password)
       await c.env.DB.prepare('UPDATE pastes SET password_hash = ?, updated_at = ? WHERE id = ?')
         .bind(passwordHash, now, id).run()
+    }
+    if (body.expiry !== undefined) {
+      if (!['1h', '3d', '30d', '90d', '300d', 'never'].includes(body.expiry)) {
+        return json({ error: 'Invalid expiry value' }, 400)
+      }
+      if (body.expiry === 'never' && !limits.canSetNeverExpire) {
+        return json({ error: 'Never-expiring pastes require Pro' }, 403)
+      }
+      const expiresAt = expiryToTimestamp(body.expiry)
+      await c.env.DB.prepare('UPDATE pastes SET expires_at = ?, updated_at = ? WHERE id = ?')
+        .bind(expiresAt ?? null, now, id).run()
     }
 
     const updated = await c.env.DB.prepare('SELECT * FROM pastes WHERE id = ?').bind(id).first<any>()
