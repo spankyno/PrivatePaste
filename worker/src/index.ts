@@ -22,12 +22,12 @@ const PRODUCTION_URL = 'https://privatepaste-production.YOUR_SUBDOMAIN.workers.d
 app.use('*', secureHeaders({
   contentSecurityPolicy: {
     defaultSrc:  ["'self'"],
-    scriptSrc:   ["'self'", "'unsafe-inline'"],   // necesario para el build de Vite
+    scriptSrc:   ["'self'", "'unsafe-inline'", 'https://challenges.cloudflare.com'],   // necesario para el build de Vite y Turnstile
     styleSrc:    ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
     fontSrc:     ["'self'", 'https://fonts.gstatic.com'],
     imgSrc:      ["'self'", 'data:'],
-    connectSrc:  ["'self'"],
-    frameSrc:    ["'none'"],
+    connectSrc:  ["'self'", 'https://challenges.cloudflare.com'],
+    frameSrc:    ["'self'", 'https://challenges.cloudflare.com'],
     objectSrc:   ["'none'"],
     baseUri:     ["'self'"],
   },
