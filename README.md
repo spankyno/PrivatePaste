@@ -95,7 +95,7 @@ reales de `migrations/` antes de cada suite — nunca toca la base de datos real
 
 Cobertura actual: `lib/password.ts` (PBKDF2 + compatibilidad con hashes legacy),
 `lib/tiers.ts` (roles, límites por tier, caducidad Pro) y los endpoints de
-`/api/auth/*` (sign-up, sign-in, change-password, honeypot, Turnstile, rate
+`/api/auth/*` (sign-up, sign-in, change-password, honeypot, Turnstile, rate 
 limiting, invalidación de sesiones). Pendiente de cubrir: `routes/pastes.ts`
 y `routes/folders.ts`. 
 
