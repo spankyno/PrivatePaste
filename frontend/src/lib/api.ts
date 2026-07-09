@@ -139,6 +139,7 @@ export const api = {
     language?: string
     visibility?: 'public' | 'private' | 'password'
     password?: string
+    expiry?: '1h' | '3d' | '30d' | '90d' | '300d' | 'never'
   }) =>
     apiFetch<Paste>(`/api/pastes/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
 
