@@ -370,6 +370,49 @@ app.post('/api/auth/resend-verification', async (c) => {
   }
 })
 
+// ─── GET /api/auth/test-email ────────────────────────────────────────────────
+app.get('/api/auth/test-email', async (c) => {
+  const to = c.req.query('to')
+  if (!to) return c.text('Missing "to" query parameter', 400)
+
+  try {
+    const res = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${c.env.RESEND_API_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        from: c.env.EMAIL_FROM || 'onboarding@resend.dev',
+        to: [to],
+        subject: 'PrivatePaste Test Email',
+        html: '<p>Este es un email de prueba para verificar tu integracion con Resend.</p>',
+      }),
+    })
+
+    const status = res.status
+    const text = await res.text()
+
+    return c.json({
+      success: res.ok,
+      status,
+      response: text,
+      config: {
+        from: c.env.EMAIL_FROM || 'onboarding@resend.dev',
+        to,
+        hasApiKey: !!c.env.RESEND_API_KEY,
+        apiKeyLength: c.env.RESEND_API_KEY?.length ?? 0,
+      }
+    })
+  } catch (err: any) {
+    return c.json({
+      success: false,
+      error: err.message,
+      stack: err.stack,
+    }, 500)
+  }
+})
+
 // ─── GET /api/me ──────────────────────────────────────────────────────────────
 app.get('/api/me', (c) => {
   const user = c.get('user')
