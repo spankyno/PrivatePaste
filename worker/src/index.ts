@@ -139,6 +139,14 @@ app.post('/api/auth/sign-up/email', authRateLimit, async (c) => {
     if (!emailRegex.test(body.email) || body.email.length > 254)
       return jsonRes({ error: 'Invalid email format' }, 400)
 
+    // Verify environment configuration before proceeding
+    if (!c.env.RESEND_API_KEY) {
+      return jsonRes({ error: 'Mail service configuration error (missing RESEND_API_KEY secret)' }, 500)
+    }
+    if (!c.env.EMAIL_FROM) {
+      return jsonRes({ error: 'Mail service configuration error (missing EMAIL_FROM variable)' }, 500)
+    }
+
     const ip = c.req.header('CF-Connecting-IP') ?? 'unknown'
     
     // Turnstile verification
@@ -311,6 +319,14 @@ app.post('/api/auth/resend-verification', async (c) => {
   try {
     const user = c.get('user')
     if (!user) return jsonRes({ error: 'Authentication required' }, 401)
+
+    // Verify environment configuration before proceeding
+    if (!c.env.RESEND_API_KEY) {
+      return jsonRes({ error: 'Mail service configuration error (missing RESEND_API_KEY secret)' }, 500)
+    }
+    if (!c.env.EMAIL_FROM) {
+      return jsonRes({ error: 'Mail service configuration error (missing EMAIL_FROM variable)' }, 500)
+    }
 
     const db  = c.env.DB
     const now = Math.floor(Date.now() / 1000)
