@@ -1,28 +1,31 @@
 /**
- * Dashboard — lista de pastes con búsqueda, carpetas y borrado.
+ * Dashboard — lista de pastes con búsqueda, carpetas, drag & drop y borrado.
  */
 import { useEffect, useState, useCallback, useRef } from 'react'
 import { Link, Navigate } from 'react-router-dom'
 import {
   Search, FileText, Trash2, ExternalLink, Eye, Clock, Lock, Globe, EyeOff,
   Plus, Loader2, Copy, Check, Folder as FolderIcon, FolderPlus, Pencil,
-  X, FolderInput,
+  X, FolderInput, GripVertical, Archive, ChevronLeft, ChevronRight,
 } from 'lucide-react'
 import { useAuth } from '@/hooks/useAuth'
+import { useDocumentHead } from '@/hooks/useDocumentHead'
 import { api, type Paste, type Folder as FolderType } from '@/lib/api'
-import { formatDistanceToNow, fromUnixTime } from 'date-fns'
+import { formatDistanceToNow, fromUnixTime, format } from 'date-fns'
 import clsx from 'clsx'
 
 const FOLDER_COLORS = ['#6366f1', '#ec4899', '#f59e0b', '#10b981', '#3b82f6', '#8b5cf6', '#ef4444', '#14b8a6']
 
 export function DashboardPage() {
+  useDocumentHead({ title: 'Mi Dashboard', noindex: true })
   const { user, tier, loading: authLoading } = useAuth()
-  const [pastes,      setPastes]      = useState<Paste[]>([])
-  const [folders,     setFolders]     = useState<FolderType[]>([])
-  const [totalPastes, setTotalPastes] = useState<number | null>(null)
+  const [pastes,   setPastes]   = useState<Paste[]>([])
+  const [folders,  setFolders]  = useState<FolderType[]>([])
   const [query,    setQuery]    = useState('')
   const [folderId, setFolderId] = useState<string | undefined>()
   const [page,     setPage]     = useState(1)
+  const [showArchived, setShowArchived] = useState(false)
+  const [hasMore,  setHasMore]  = useState(false)
   const [loading,  setLoading]  = useState(true)
   const [deleting, setDeleting] = useState<string | null>(null)
   const [copiedId, setCopiedId] = useState<string | null>(null)
@@ -36,25 +39,25 @@ export function DashboardPage() {
   const [moveMenuFor, setMoveMenuFor] = useState<string | null>(null)
   const moveMenuRef = useRef<HTMLDivElement>(null)
 
-  const canUseFolders = tier === 'registered' || tier === 'pro'
+  // Drag & drop state
+  const [draggingId,  setDraggingId]  = useState<string | null>(null)
+  const [dragOverId,  setDragOverId]  = useState<string | null>(null) // 'root' o folder.id
 
-  // Límite de pastes del tier
-  const maxPastes = tier === 'pro' ? 10000 : tier === 'registered' ? 100 : 10
+  const canUseFolders = tier === 'registered' || tier === 'pro'
 
   const fetchAll = useCallback(async () => {
     setLoading(true)
     try {
-      const [pastesRes, foldersRes, statsRes] = await Promise.all([
-        api.listPastes({ q: query || undefined, folderId, page }),
+      const [pastesRes, foldersRes] = await Promise.all([
+        api.listPastes({ q: query || undefined, folderId, page, archived: showArchived }),
         api.listFolders(),
-        api.getPasteStats(),
       ])
       setPastes(pastesRes.pastes)
+      setHasMore(pastesRes.hasMore)
       setFolders(foldersRes.folders)
-      setTotalPastes(statsRes.total)
     } catch { /* handled */ }
     finally { setLoading(false) }
-  }, [query, folderId, page])
+  }, [query, folderId, page, showArchived])
 
   useEffect(() => { if (user) fetchAll() }, [user, fetchAll])
 
@@ -88,15 +91,70 @@ export function DashboardPage() {
     setTimeout(() => setCopiedId(null), 2000)
   }
 
+  /**
+   * Mueve un paste a una carpeta (o a null = sin carpeta).
+   * Si la vista actual está filtrada por carpeta y el destino es distinto,
+   * el paste se elimina del array local — esto arregla el bug de que
+   * el paste seguía visible en la carpeta origen tras moverlo.
+   */
+  const movePasteToFolder = async (pasteId: string, targetFolderId: string | null) => {
+    try {
+      await api.updatePaste(pasteId, { folderId: targetFolderId })
+      setPastes(ps => {
+        // Si estamos viendo "All pastes" (folderId === undefined), solo actualizamos el campo
+        if (folderId === undefined) {
+          return ps.map(p => p.id === pasteId ? { ...p, folderId: targetFolderId } : p)
+        }
+        // Si estamos dentro de una carpeta concreta y el destino es otra carpeta
+        // (o ninguna), el paste ya no pertenece a esta vista — lo quitamos.
+        if (targetFolderId !== folderId) {
+          return ps.filter(p => p.id !== pasteId)
+        }
+        return ps
+      })
+    } catch { /* ignore */ }
+  }
+
   const handleMoveToFolder = async (pasteId: string, targetFolderId: string | null, e: React.MouseEvent) => {
     e.preventDefault()
     e.stopPropagation()
-    try {
-      await api.updatePaste(pasteId, { folderId: targetFolderId })
-      setPastes(ps => ps.map(p => p.id === pasteId ? { ...p, folderId: targetFolderId } : p))
-    } catch { /* ignore */ }
+    await movePasteToFolder(pasteId, targetFolderId)
     setMoveMenuFor(null)
   }
+
+  // ─── Drag & drop handlers ─────────────────────────────────────────────────
+
+  const handleDragStart = (pasteId: string) => (e: React.DragEvent) => {
+    setDraggingId(pasteId)
+    e.dataTransfer.effectAllowed = 'move'
+    e.dataTransfer.setData('text/plain', pasteId)
+  }
+
+  const handleDragEnd = () => {
+    setDraggingId(null)
+    setDragOverId(null)
+  }
+
+  const handleDragOverFolder = (targetId: string) => (e: React.DragEvent) => {
+    e.preventDefault()
+    e.dataTransfer.dropEffect = 'move'
+    setDragOverId(targetId)
+  }
+
+  const handleDragLeaveFolder = () => {
+    setDragOverId(null)
+  }
+
+  const handleDropOnFolder = (targetFolderId: string | null) => async (e: React.DragEvent) => {
+    e.preventDefault()
+    const pasteId = e.dataTransfer.getData('text/plain') || draggingId
+    setDragOverId(null)
+    setDraggingId(null)
+    if (!pasteId) return
+    await movePasteToFolder(pasteId, targetFolderId)
+  }
+
+  // ─── Folder modal handlers ────────────────────────────────────────────────
 
   const openCreateFolder = () => {
     setEditingFolder(null)
@@ -161,38 +219,13 @@ export function DashboardPage() {
           <h1 className="text-xl font-semibold">My pastes</h1>
           <p className="text-sm text-[var(--text-muted)] mt-0.5">
             {tier === 'pro' ? 'Pro' : 'Free'} account · {pastes.length} paste{pastes.length !== 1 ? 's' : ''} shown
+            {tier === 'pro' && user.proExpiresAt && (
+              <> · Pro expires {format(fromUnixTime(user.proExpiresAt), 'PP')}</>
+            )}
+            {canUseFolders && <span className="hidden sm:inline"> · drag a paste onto a folder to move it</span>}
           </p>
-          {/* Contador de pastes activos */}
-          {totalPastes !== null && (
-            <div className="mt-2 flex flex-col gap-1">
-              <div className="flex items-center justify-between text-xs text-[var(--text-muted)]">
-                <span>{totalPastes.toLocaleString()} / {tier === 'pro' ? '10.000' : maxPastes.toLocaleString()} pastes activos</span>
-                <span className={clsx(
-                  'font-medium',
-                  totalPastes / maxPastes > 0.9 ? 'text-red-500' :
-                  totalPastes / maxPastes > 0.7 ? 'text-amber-500' :
-                  'text-[var(--text-faint)]'
-                )}>
-                  {tier === 'pro' ? '' : `${Math.round((totalPastes / maxPastes) * 100)}%`}
-                </span>
-              </div>
-              {tier !== 'pro' && (
-                <div className="h-1.5 bg-[var(--bg-tertiary)] rounded-full overflow-hidden w-48">
-                  <div
-                    className={clsx(
-                      'h-full rounded-full transition-all duration-500',
-                      totalPastes / maxPastes > 0.9 ? 'bg-red-500' :
-                      totalPastes / maxPastes > 0.7 ? 'bg-amber-500' :
-                      'bg-brand-500'
-                    )}
-                    style={{ width: `${Math.min((totalPastes / maxPastes) * 100, 100)}%` }}
-                  />
-                </div>
-              )}
-            </div>
-          )}
         </div>
-        <Link to="/" className="btn-primary text-sm">
+        <Link to="/new" className="btn-primary text-sm">
           <Plus className="w-4 h-4" />
           New paste
         </Link>
@@ -211,11 +244,16 @@ export function DashboardPage() {
               )}
             </div>
 
+            {/* "All pastes" — también es drop target para sacar de cualquier carpeta */}
             <button
-              onClick={() => setFolderId(undefined)}
+              onClick={() => { setFolderId(undefined); setPage(1) }}
+              onDragOver={canUseFolders ? handleDragOverFolder('root') : undefined}
+              onDragLeave={canUseFolders ? handleDragLeaveFolder : undefined}
+              onDrop={canUseFolders ? handleDropOnFolder(null) : undefined}
               className={clsx(
                 'flex items-center gap-2 px-2 py-1.5 rounded-md text-sm transition-colors text-left',
-                !folderId ? 'bg-brand-600/10 text-brand-600 dark:bg-brand-500/10 dark:text-brand-400' : 'text-[var(--text-muted)] hover:bg-[var(--bg-tertiary)]'
+                !folderId ? 'bg-brand-600/10 text-brand-600 dark:bg-brand-500/10 dark:text-brand-400' : 'text-[var(--text-muted)] hover:bg-[var(--bg-tertiary)]',
+                dragOverId === 'root' && 'ring-2 ring-brand-500 bg-brand-600/10'
               )}
             >
               <FileText className="w-4 h-4" />
@@ -225,11 +263,15 @@ export function DashboardPage() {
             {folders.map(f => (
               <div
                 key={f.id}
+                onClick={() => { setFolderId(folderId === f.id ? undefined : f.id); setPage(1) }}
+                onDragOver={canUseFolders ? handleDragOverFolder(f.id) : undefined}
+                onDragLeave={canUseFolders ? handleDragLeaveFolder : undefined}
+                onDrop={canUseFolders ? handleDropOnFolder(f.id) : undefined}
                 className={clsx(
                   'group flex items-center gap-2 px-2 py-1.5 rounded-md text-sm transition-colors cursor-pointer',
-                  folderId === f.id ? 'bg-brand-600/10 text-brand-600 dark:bg-brand-500/10 dark:text-brand-400' : 'text-[var(--text-muted)] hover:bg-[var(--bg-tertiary)]'
+                  folderId === f.id ? 'bg-brand-600/10 text-brand-600 dark:bg-brand-500/10 dark:text-brand-400' : 'text-[var(--text-muted)] hover:bg-[var(--bg-tertiary)]',
+                  dragOverId === f.id && 'ring-2 ring-brand-500 bg-brand-600/10 scale-[1.02]'
                 )}
-                onClick={() => setFolderId(folderId === f.id ? undefined : f.id)}
               >
                 <div className="w-3 h-3 rounded-sm flex-shrink-0" style={{ background: f.color }} />
                 <span className="truncate flex-1">{f.name}</span>
@@ -276,6 +318,19 @@ export function DashboardPage() {
                 <FolderIcon className="w-3 h-3" /> {activeFolder.name}
               </span>
             )}
+            {tier === 'pro' && (
+              <button
+                onClick={() => { setShowArchived(v => !v); setPage(1) }}
+                className={clsx(
+                  'btn-secondary text-xs py-1.5 px-3 flex-shrink-0',
+                  showArchived && 'bg-brand-600/10 text-brand-600 dark:text-brand-400 border-brand-600/30'
+                )}
+                title="Expired pastes are archived instead of deleted on the Pro plan"
+              >
+                <Archive className="w-3.5 h-3.5" />
+                {showArchived ? 'Archived' : 'Show archived'}
+              </button>
+            )}
           </div>
 
           {loading ? (
@@ -285,9 +340,11 @@ export function DashboardPage() {
           ) : pastes.length === 0 ? (
             <div className="text-center py-16 text-[var(--text-muted)]">
               <FileText className="w-10 h-10 mx-auto mb-3 opacity-30" />
-              <p className="font-medium">{query ? 'No results found' : 'No pastes yet'}</p>
-              {!query && (
-                <Link to="/" className="btn-primary mt-4 inline-flex">Create your first paste</Link>
+              <p className="font-medium">
+                {query ? 'No results found' : showArchived ? 'No archived pastes' : 'No pastes yet'}
+              </p>
+              {!query && !showArchived && (
+                <Link to="/new" className="btn-primary mt-4 inline-flex">Create your first paste</Link>
               )}
             </div>
           ) : (
@@ -296,9 +353,19 @@ export function DashboardPage() {
                 <Link
                   key={paste.id}
                   to={`/p/${paste.id}`}
-                  className="card p-4 hover:border-[var(--border-strong)] transition-colors group relative"
+                  draggable={canUseFolders}
+                  onDragStart={canUseFolders ? handleDragStart(paste.id) : undefined}
+                  onDragEnd={canUseFolders ? handleDragEnd : undefined}
+                  className={clsx(
+                    'card p-4 hover:border-[var(--border-strong)] transition-colors group relative',
+                    draggingId === paste.id && 'opacity-40',
+                    canUseFolders && 'cursor-grab active:cursor-grabbing'
+                  )}
                 >
                   <div className="flex items-start gap-3">
+                    {canUseFolders && (
+                      <GripVertical className="w-4 h-4 text-[var(--text-faint)] mt-0.5 flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity" />
+                    )}
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2">
                         {visIcon(paste.visibility)}
@@ -306,6 +373,11 @@ export function DashboardPage() {
                         <span className="badge bg-[var(--bg-tertiary)] text-[var(--text-muted)] hidden sm:inline-flex">
                           {paste.language}
                         </span>
+                        {paste.isArchived && (
+                          <span className="badge bg-amber-500/10 text-amber-600 dark:text-amber-400 inline-flex items-center gap-1">
+                            <Archive className="w-3 h-3" /> Archived
+                          </span>
+                        )}
                       </div>
                       <div className="flex items-center gap-3 mt-1 text-xs text-[var(--text-faint)]">
                         <span className="flex items-center gap-1">
@@ -389,6 +461,30 @@ export function DashboardPage() {
                   </div>
                 </Link>
               ))}
+            </div>
+          )}
+
+          {!loading && (pastes.length > 0 || page > 1) && (
+            <div className="flex items-center justify-between pt-4 mt-2 border-t border-[var(--border)]">
+              <button
+                onClick={() => setPage(p => Math.max(1, p - 1))}
+                disabled={page === 1}
+                className="btn-secondary text-sm py-1.5 px-3 disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                <ChevronLeft className="w-4 h-4" />
+                Previous
+              </button>
+
+              <span className="text-xs text-[var(--text-faint)]">Page {page}</span>
+
+              <button
+                onClick={() => setPage(p => p + 1)}
+                disabled={!hasMore}
+                className="btn-secondary text-sm py-1.5 px-3 disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                Next
+                <ChevronRight className="w-4 h-4" />
+              </button>
             </div>
           )}
         </div>

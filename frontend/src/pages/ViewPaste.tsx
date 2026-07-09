@@ -6,9 +6,10 @@ import { useEffect, useState } from 'react'
 import { useParams, Link, useNavigate } from 'react-router-dom'
 import ReactCodeMirror from '@uiw/react-codemirror'
 import { oneDark } from '@codemirror/theme-one-dark'
-import { Copy, Check, ExternalLink, Trash2, Clock, Eye, Lock, Globe, EyeOff, Loader2, Pencil } from 'lucide-react'
+import { Copy, Check, ExternalLink, Trash2, Clock, Eye, Lock, Globe, EyeOff, Loader2, Pencil, Save, X } from 'lucide-react'
 import { useDarkMode } from '@/hooks/useDarkMode'
 import { useAuth } from '@/hooks/useAuth'
+import { useDocumentHead } from '@/hooks/useDocumentHead'
 import { api, type Paste, ApiError } from '@/lib/api'
 import { getLanguage } from '@/lib/languages'
 import { formatDistanceToNow, fromUnixTime } from 'date-fns'
@@ -26,6 +27,17 @@ export function ViewPastePage() {
   const [langExt,     setLangExt]     = useState<any>([])
   const [copied,      setCopied]      = useState(false)
   const [deleting,    setDeleting]    = useState(false)
+
+  // Edit state
+  const [editing,     setEditing]     = useState(false)
+  const [editContent, setEditContent] = useState('')
+  const [saving,      setSaving]      = useState(false)
+  const [saveError,   setSaveError]   = useState<string | null>(null)
+
+  // Contenido de terceros/privado — nunca debe indexarse en buscadores,
+  // más allá de que robots.txt ya lo desaconseje para los crawlers que
+  // lo respeten.
+  useDocumentHead({ title: paste?.title || 'Ver paste', noindex: true })
 
   // Password unlock state
   const [locked,      setLocked]      = useState(false)
@@ -95,6 +107,37 @@ export function ViewPastePage() {
     }
   }
 
+  const handleEditStart = () => {
+    if (!paste) return
+    setEditContent(paste.content ?? '')
+    setSaveError(null)
+    setEditing(true)
+  }
+
+  const handleEditCancel = () => {
+    setEditing(false)
+    setSaveError(null)
+  }
+
+  const handleEditSave = async () => {
+    if (!id) return
+    if (!editContent.trim()) {
+      setSaveError('Content cannot be empty')
+      return
+    }
+    setSaving(true)
+    setSaveError(null)
+    try {
+      const updated = await api.updatePaste(id, { content: editContent })
+      setPaste(updated)
+      setEditing(false)
+    } catch (err: any) {
+      setSaveError(err.message ?? 'Failed to save changes')
+    } finally {
+      setSaving(false)
+    }
+  }
+
   if (loading) return (
     <div className="flex items-center justify-center min-h-[50vh]">
       <Loader2 className="w-6 h-6 animate-spin text-[var(--text-muted)]" />
@@ -106,13 +149,14 @@ export function ViewPastePage() {
       <p className="text-4xl mb-4">🫥</p>
       <h1 className="text-xl font-semibold mb-2">Paste not found</h1>
       <p className="text-[var(--text-muted)] mb-6">{error}</p>
-      <Link to="/" className="btn-primary">Create new paste</Link>
+      <Link to="/new" className="btn-primary">Create new paste</Link>
     </div>
   )
 
   if (!paste) return null
 
   const isOwner   = user && paste.userId === user.id
+  const isExpired = !!paste.expiresAt && paste.expiresAt < Math.floor(Date.now() / 1000)
   const expiryStr = paste.expiresAt
     ? `Expires ${formatDistanceToNow(fromUnixTime(paste.expiresAt), { addSuffix: true })}`
     : 'Never expires'
@@ -155,6 +199,14 @@ export function ViewPastePage() {
   // ── Main view ───────────────────────────────────────────────────────────────
   return (
     <div className="max-w-6xl mx-auto px-4 py-6 flex flex-col gap-4 animate-fade-in">
+      {isOwner && isExpired && (
+        <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-2.5 text-sm text-amber-700 dark:text-amber-400 flex items-center gap-2">
+          <Clock className="w-4 h-4 flex-shrink-0" />
+          This paste expired {formatDistanceToNow(fromUnixTime(paste.expiresAt!), { addSuffix: true })} and is now
+          archived — it's no longer publicly accessible, but you can still view it here since you're the owner.
+        </div>
+      )}
+
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center gap-3">
         <div className="flex-1 min-w-0">
@@ -181,56 +233,84 @@ export function ViewPastePage() {
 
         {/* Action buttons */}
         <div className="flex items-center gap-2 flex-shrink-0">
-          <a
-            href={`/raw/${paste.id}`}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="btn-secondary text-xs py-1.5 px-3"
-          >
-            <ExternalLink className="w-3.5 h-3.5" />
-            Raw
-          </a>
-
-          <button onClick={handleCopy} className="btn-secondary text-xs py-1.5 px-3">
-            {copied
-              ? <><Check className="w-3.5 h-3.5 text-green-500" /> Copied</>
-              : <><Copy  className="w-3.5 h-3.5" /> Copy</>}
-          </button>
-
-          {isOwner && (
-            <div className="flex items-center gap-2">
-              <Link
-                to={`/p/${id}/edit`}
+          {editing ? (
+            <>
+              <button
+                onClick={handleEditCancel}
+                disabled={saving}
                 className="btn-secondary text-xs py-1.5 px-3"
               >
-                <Pencil className="w-3.5 h-3.5" />
-                Edit
-              </Link>
-              <button
-                onClick={handleDelete}
-                disabled={deleting}
-                className="btn-danger text-xs py-1.5 px-3"
-              >
-                {deleting
-                  ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                  : <Trash2  className="w-3.5 h-3.5" />}
-                {deleting ? 'Deleting…' : 'Delete'}
+                <X className="w-3.5 h-3.5" />
+                Cancel
               </button>
-            </div>
+              <button
+                onClick={handleEditSave}
+                disabled={saving}
+                className="btn-primary text-xs py-1.5 px-3"
+              >
+                {saving
+                  ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  : <Save    className="w-3.5 h-3.5" />}
+                {saving ? 'Saving…' : 'Save'}
+              </button>
+            </>
+          ) : (
+            <>
+              <a
+                href={`/raw/${paste.id}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="btn-secondary text-xs py-1.5 px-3"
+              >
+                <ExternalLink className="w-3.5 h-3.5" />
+                Raw
+              </a>
+
+              <button onClick={handleCopy} className="btn-secondary text-xs py-1.5 px-3">
+                {copied
+                  ? <><Check className="w-3.5 h-3.5 text-green-500" /> Copied</>
+                  : <><Copy  className="w-3.5 h-3.5" /> Copy</>}
+              </button>
+
+              {isOwner && (
+                <button onClick={handleEditStart} className="btn-secondary text-xs py-1.5 px-3">
+                  <Pencil className="w-3.5 h-3.5" />
+                  Edit
+                </button>
+              )}
+
+              {isOwner && (
+                <button
+                  onClick={handleDelete}
+                  disabled={deleting}
+                  className="btn-danger text-xs py-1.5 px-3"
+                >
+                  {deleting
+                    ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    : <Trash2  className="w-3.5 h-3.5" />}
+                  {deleting ? 'Deleting…' : 'Delete'}
+                </button>
+              )}
+            </>
           )}
         </div>
       </div>
 
-      {/* Code editor (read-only) */}
+      {saveError && (
+        <p className="text-red-500 text-sm -mt-2">{saveError}</p>
+      )}
+
+      {/* Code editor (read-only unless editing) */}
       <div className="rounded-xl border border-[var(--border)] overflow-hidden">
         <ReactCodeMirror
-          value={paste.content}
+          value={editing ? editContent : paste.content}
           extensions={langExt}
           theme={dark ? oneDark : undefined}
-          editable={false}
+          editable={editing}
+          onChange={(value) => { if (editing) setEditContent(value) }}
           basicSetup={{
             lineNumbers:      true,
-            highlightActiveLine: false,
+            highlightActiveLine: editing,
             foldGutter:       true,
           }}
           style={{ fontSize: 14 }}
@@ -242,7 +322,7 @@ export function ViewPastePage() {
         <span>
           Created {formatDistanceToNow(fromUnixTime(paste.createdAt), { addSuffix: true })}
         </span>
-        <span>{paste.content?.length.toLocaleString()} chars</span>
+        <span>{(editing ? editContent : paste.content)?.length.toLocaleString()} chars</span>
       </div>
     </div>
   )

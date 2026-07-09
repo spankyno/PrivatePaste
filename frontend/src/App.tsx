@@ -1,13 +1,34 @@
 import { BrowserRouter, Routes, Route } from 'react-router-dom'
-import { AuthProvider } from '@/hooks/useAuth'
+import { AuthProvider, useAuth } from '@/hooks/useAuth'
 import { Navbar } from '@/components/layout/Navbar'
+import { EmailVerificationBanner } from '@/components/layout/EmailVerificationBanner'
 import { Footer } from '@/components/layout/Footer'
 import { CreatePastePage } from '@/pages/CreatePaste'
 import { ViewPastePage }   from '@/pages/ViewPaste'
-import { EditPastePage }   from '@/pages/EditPaste'
 import { AuthPage }        from '@/pages/Auth'
+import { VerifyEmailPage } from '@/pages/VerifyEmail'
 import { DashboardPage }   from '@/pages/Dashboard'
 import { AboutPage }       from '@/pages/About'
+import { Loader2 } from 'lucide-react'
+
+/**
+ * Vista de "/". Con sesión iniciada, la vista por defecto de la app es
+ * el Dashboard. Sin sesión, se mantiene el formulario de creación de
+ * paste — es el flujo anónimo (sin cuenta) que es el punto de entrada
+ * principal para visitantes nuevos, y el Dashboard no les serviría de
+ * nada (no tienen pastes propios que listar).
+ */
+function HomeRoute() {
+  const { user, loading } = useAuth()
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center min-h-[60vh]">
+        <Loader2 className="w-6 h-6 animate-spin text-[var(--text-faint)]" />
+      </div>
+    )
+  }
+  return user ? <DashboardPage /> : <CreatePastePage />
+}
 
 export default function App() {
   return (
@@ -15,15 +36,16 @@ export default function App() {
       <AuthProvider>
         <div className="min-h-screen flex flex-col bg-[var(--bg)]">
           <Navbar />
+          <EmailVerificationBanner />
           <main className="flex-1">
             <Routes>
-              <Route path="/"           element={<CreatePastePage />} />
-              <Route path="/p/:id"      element={<ViewPastePage />} />
-              <Route path="/p/:id/edit" element={<EditPastePage />} />
-              <Route path="/auth"       element={<AuthPage />} />
-              <Route path="/dashboard"  element={<DashboardPage />} />
-              <Route path="/about"      element={<AboutPage />} />
-              {/* Catch-all */}
+              <Route path="/"          element={<HomeRoute />} />
+              <Route path="/new"       element={<CreatePastePage />} />
+              <Route path="/p/:id"     element={<ViewPastePage />} />
+              <Route path="/auth"          element={<AuthPage />} />
+              <Route path="/verify-email"  element={<VerifyEmailPage />} />
+              <Route path="/dashboard"     element={<DashboardPage />} />
+              <Route path="/about"     element={<AboutPage />} />
               <Route path="*" element={
                 <div className="flex items-center justify-center min-h-[60vh] flex-col gap-4">
                   <p className="text-5xl">404</p>
@@ -33,7 +55,6 @@ export default function App() {
               } />
             </Routes>
           </main>
-
           <Footer />
         </div>
       </AuthProvider>
