@@ -132,7 +132,14 @@ export const api = {
   deletePaste: (id: string) =>
     apiFetch(`/api/pastes/${id}`, { method: 'DELETE' }),
 
-  updatePaste: (id: string, data: { title?: string; folderId?: string | null; content?: string; language?: string }) =>
+  updatePaste: (id: string, data: {
+    title?: string
+    folderId?: string | null
+    content?: string
+    language?: string
+    visibility?: 'public' | 'private' | 'password'
+    password?: string
+  }) =>
     apiFetch<Paste>(`/api/pastes/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
 
   // ── Folders ───────────────────────────────────────────────────────────────
