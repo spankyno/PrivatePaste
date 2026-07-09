@@ -9,6 +9,8 @@ import { rateLimitMiddleware, authRateLimit } from './middleware/rateLimit'
 import pastesRouter from './routes/pastes'
 import foldersRouter from './routes/folders'
 import { handleScheduled } from './cron'
+import { verifyTurnstile } from './lib/turnstile'
+import { sendEmail, verificationEmailHtml } from './lib/email'
 
 const app = new Hono<{ Bindings: Env }>()
 
@@ -116,15 +118,34 @@ function safeError(c: { env: { ENVIRONMENT: string } }, publicMsg: string, inter
 // ─── POST /api/auth/sign-up/email ─────────────────────────────────────────────
 app.post('/api/auth/sign-up/email', authRateLimit, async (c) => {
   try {
-    const body = await c.req.json<{ email: string; password: string; name?: string }>()
+    const body = await c.req.json<{
+      email: string
+      password: string
+      name?: string
+      turnstileToken?: string
+      website?: string
+    }>()
     if (!body.email || !body.password)
       return jsonRes({ error: 'Email and password required' }, 400)
     if (body.password.length < 8)
       return jsonRes({ error: 'Password must be at least 8 characters' }, 400)
+    
+    // Honeypot check (website must be empty)
+    if (body.website)
+      return jsonRes({ error: 'Bot registration blocked' }, 400)
+
     // Fix 1: validar formato de email
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/
     if (!emailRegex.test(body.email) || body.email.length > 254)
       return jsonRes({ error: 'Invalid email format' }, 400)
+
+    const ip = c.req.header('CF-Connecting-IP') ?? 'unknown'
+    
+    // Turnstile verification
+    const turnstileOk = await verifyTurnstile(body.turnstileToken, c.env.TURNSTILE_SECRET_KEY, ip)
+    if (!turnstileOk) {
+      return jsonRes({ error: 'Turnstile verification failed' }, 400)
+    }
 
     const db  = c.env.DB
     const now = Math.floor(Date.now() / 1000)
@@ -151,6 +172,27 @@ app.post('/api/auth/sign-up/email', authRateLimit, async (c) => {
       c.req.header('CF-Connecting-IP') ?? null,
       c.req.header('User-Agent') ?? null,
       now, now).run()
+
+    // Create verification token (48 chars as checked by tests)
+    const verifyToken = nanoid(48)
+    const verifyExp   = now + 86400 // 24 hours
+
+    await db.prepare(
+      'INSERT INTO verifications (id, identifier, value, expires_at, created_at, updated_at) VALUES (?,?,?,?,?,?)'
+    ).bind(nanoid(), body.email.toLowerCase(), verifyToken, verifyExp, now, now).run()
+
+    // Send verification email via Resend
+    const origin = new URL(c.req.url).origin
+    const verifyUrl = `${origin}/verify-email?token=${verifyToken}`
+    c.executionCtx.waitUntil(
+      sendEmail(
+        c.env.RESEND_API_KEY,
+        c.env.EMAIL_FROM,
+        body.email.toLowerCase(),
+        'Verifica tu email en PrivatePaste',
+        verificationEmailHtml(verifyUrl)
+      )
+    )
 
     return jsonRes(
       { user: { id: userId, email: body.email.toLowerCase(), name: body.name ?? null, role: 'registered' } },
@@ -229,6 +271,87 @@ app.get('/api/auth/session', async (c) => {
     session: { id: row.sid, expiresAt: row.expires_at },
     user:    { id: row.id, email: row.email, name: row.name, role: row.role },
   })
+})
+
+// ─── POST /api/auth/verify-email ──────────────────────────────────────────────
+app.post('/api/auth/verify-email', async (c) => {
+  try {
+    const { token } = await c.req.json<{ token: string }>()
+    if (!token) return jsonRes({ error: 'Token required' }, 400)
+
+    const db  = c.env.DB
+    const now = Math.floor(Date.now() / 1000)
+
+    const verification = await db.prepare(
+      'SELECT * FROM verifications WHERE value = ?'
+    ).bind(token).first<any>()
+
+    if (!verification || verification.expires_at < now) {
+      return jsonRes({ error: 'Invalid or expired token' }, 400)
+    }
+
+    // Mark user as verified
+    await db.prepare(
+      'UPDATE users SET email_verified_at = ?, updated_at = ? WHERE email = ?'
+    ).bind(now, now, verification.identifier).run()
+
+    // Delete token (one-time use)
+    await db.prepare(
+      'DELETE FROM verifications WHERE value = ?'
+    ).bind(token).run()
+
+    return jsonRes({ success: true })
+  } catch (err) {
+    return safeError(c, 'Verification failed', err)
+  }
+})
+
+// ─── POST /api/auth/resend-verification ───────────────────────────────────────
+app.post('/api/auth/resend-verification', async (c) => {
+  try {
+    const user = c.get('user')
+    if (!user) return jsonRes({ error: 'Authentication required' }, 401)
+
+    const db  = c.env.DB
+    const now = Math.floor(Date.now() / 1000)
+
+    // Check if already verified
+    const dbUser = await db.prepare('SELECT email_verified_at FROM users WHERE id = ?')
+      .bind(user.id).first<{ email_verified_at: number | null }>()
+    if (dbUser?.email_verified_at) {
+      return jsonRes({ error: 'Email already verified' }, 400)
+    }
+
+    const email = user.email.toLowerCase()
+
+    // Delete existing verification tokens for this email
+    await db.prepare('DELETE FROM verifications WHERE identifier = ?').bind(email).run()
+
+    // Create new token
+    const token     = nanoid(48)
+    const expiresAt = now + 86400 // 24 hours
+
+    await db.prepare(
+      'INSERT INTO verifications (id, identifier, value, expires_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)'
+    ).bind(nanoid(), email, token, expiresAt, now, now).run()
+
+    // Send verification email via Resend
+    const origin = new URL(c.req.url).origin
+    const verifyUrl = `${origin}/verify-email?token=${token}`
+    c.executionCtx.waitUntil(
+      sendEmail(
+        c.env.RESEND_API_KEY,
+        c.env.EMAIL_FROM,
+        email,
+        'Verifica tu email en PrivatePaste',
+        verificationEmailHtml(verifyUrl)
+      )
+    )
+
+    return jsonRes({ success: true })
+  } catch (err) {
+    return safeError(c, 'Failed to resend verification', err)
+  }
 })
 
 // ─── GET /api/me ──────────────────────────────────────────────────────────────
