@@ -1,9 +1,9 @@
 User-agent: *
 Allow: /
 Allow: /about
+Allow: /new
 Disallow: /dashboard
 Disallow: /auth
-Disallow: /verify-email
 Disallow: /p/
 
 Sitemap: https://privatepaste-production.kbo1.workers.dev/sitemap.xml
