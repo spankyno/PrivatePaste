@@ -29,6 +29,7 @@ jobs:
         run: npm run build -w frontend
         env:
           NODE_ENV: production
+          VITE_TURNSTILE_SITE_KEY: ${{ vars.VITE_TURNSTILE_SITE_KEY }}
 
       - name: Run D1 migrations
         run: npx wrangler d1 migrations apply privatepaste-db --remote
