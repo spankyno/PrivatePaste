@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route } from 'react-router-dom'
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { AuthProvider, useAuth } from '@/hooks/useAuth'
 import { Navbar } from '@/components/layout/Navbar'
 import { Footer } from '@/components/layout/Footer'
@@ -10,11 +10,9 @@ import { AboutPage }       from '@/pages/About'
 import { Loader2 } from 'lucide-react'
 
 /**
- * Vista de "/". Con sesión iniciada, la vista por defecto de la app es
- * el Dashboard. Sin sesión, se mantiene el formulario de creación de
- * paste — es el flujo anónimo (sin cuenta) que es el punto de entrada
- * principal para visitantes nuevos, y el Dashboard no les serviría de
- * nada (no tienen pastes propios que listar).
+ * Vista de "/". No es una página en sí — redirige según el estado de
+ * sesión: con cuenta va a /dashboard, sin cuenta a /about. El flujo de
+ * creación de paste anónimo sigue disponible en /new.
  */
 function HomeRoute() {
   const { user, loading } = useAuth()
@@ -25,7 +23,7 @@ function HomeRoute() {
       </div>
     )
   }
-  return user ? <DashboardPage /> : <CreatePastePage />
+  return <Navigate to={user ? '/dashboard' : '/about'} replace />
 }
 
 export default function App() {
