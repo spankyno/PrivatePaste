@@ -7,7 +7,7 @@ Pastebin moderno y privado desplegado en el edge de Cloudflare.
 
 | Capa | Tecnología |
 |---|---|
-| Runtime | Cloudflare Workers |
+| Runtime | Cloudflare Workers | 
 | Framework | Hono 4 |
 | Base de datos | Cloudflare D1 (SQLite) + Drizzle ORM |
 | Rate limiting | Cloudflare Workers KV |
