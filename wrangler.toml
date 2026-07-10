@@ -32,10 +32,6 @@ id = "a48f8c6c49a04196bcb5bcc485ae547f"
 #     .gitignore) y `wrangler dev` lo cargará automáticamente.
 [vars]
 ENVIRONMENT = "production"
-# Remitente de los emails transaccionales (verificación, etc.) vía Resend.
-# No es secreto (solo una dirección), pero el dominio debe estar
-# verificado en tu cuenta de Resend o los envíos fallarán/irán a spam.
-EMAIL_FROM = "onboarding@resend.dev"
 
 # Cron: limpieza automática cada hora
 [[triggers]]

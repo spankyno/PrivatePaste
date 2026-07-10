@@ -10,7 +10,6 @@ import pastesRouter from './routes/pastes'
 import foldersRouter from './routes/folders'
 import { handleScheduled } from './cron'
 import { verifyTurnstile } from './lib/turnstile'
-import { sendEmail, verificationEmailHtml } from './lib/email'
 
 const app = new Hono<{ Bindings: Env }>()
 
@@ -139,14 +138,6 @@ app.post('/api/auth/sign-up/email', authRateLimit, async (c) => {
     if (!emailRegex.test(body.email) || body.email.length > 254)
       return jsonRes({ error: 'Invalid email format' }, 400)
 
-    // Verify environment configuration before proceeding
-    if (!c.env.RESEND_API_KEY) {
-      return jsonRes({ error: 'Mail service configuration error (missing RESEND_API_KEY secret)' }, 500)
-    }
-    if (!c.env.EMAIL_FROM) {
-      return jsonRes({ error: 'Mail service configuration error (missing EMAIL_FROM variable)' }, 500)
-    }
-
     const ip = c.req.header('CF-Connecting-IP') ?? 'unknown'
     
     // Turnstile verification
@@ -180,27 +171,6 @@ app.post('/api/auth/sign-up/email', authRateLimit, async (c) => {
       c.req.header('CF-Connecting-IP') ?? null,
       c.req.header('User-Agent') ?? null,
       now, now).run()
-
-    // Create verification token (48 chars as checked by tests)
-    const verifyToken = nanoid(48)
-    const verifyExp   = now + 86400 // 24 hours
-
-    await db.prepare(
-      'INSERT INTO verifications (id, identifier, value, expires_at, created_at, updated_at) VALUES (?,?,?,?,?,?)'
-    ).bind(nanoid(), body.email.toLowerCase(), verifyToken, verifyExp, now, now).run()
-
-    // Send verification email via Resend
-    const origin = new URL(c.req.url).origin
-    const verifyUrl = `${origin}/verify-email?token=${verifyToken}`
-    c.executionCtx.waitUntil(
-      sendEmail(
-        c.env.RESEND_API_KEY,
-        c.env.EMAIL_FROM,
-        body.email.toLowerCase(),
-        'Verifica tu email en PrivatePaste',
-        verificationEmailHtml(verifyUrl)
-      )
-    )
 
     return jsonRes(
       { user: { id: userId, email: body.email.toLowerCase(), name: body.name ?? null, role: 'registered' } },
@@ -279,138 +249,6 @@ app.get('/api/auth/session', async (c) => {
     session: { id: row.sid, expiresAt: row.expires_at },
     user:    { id: row.id, email: row.email, name: row.name, role: row.role },
   })
-})
-
-// ─── POST /api/auth/verify-email ──────────────────────────────────────────────
-app.post('/api/auth/verify-email', async (c) => {
-  try {
-    const { token } = await c.req.json<{ token: string }>()
-    if (!token) return jsonRes({ error: 'Token required' }, 400)
-
-    const db  = c.env.DB
-    const now = Math.floor(Date.now() / 1000)
-
-    const verification = await db.prepare(
-      'SELECT * FROM verifications WHERE value = ?'
-    ).bind(token).first<any>()
-
-    if (!verification || verification.expires_at < now) {
-      return jsonRes({ error: 'Invalid or expired token' }, 400)
-    }
-
-    // Mark user as verified
-    await db.prepare(
-      'UPDATE users SET email_verified_at = ?, updated_at = ? WHERE email = ?'
-    ).bind(now, now, verification.identifier).run()
-
-    // Delete token (one-time use)
-    await db.prepare(
-      'DELETE FROM verifications WHERE value = ?'
-    ).bind(token).run()
-
-    return jsonRes({ success: true })
-  } catch (err) {
-    return safeError(c, 'Verification failed', err)
-  }
-})
-
-// ─── POST /api/auth/resend-verification ───────────────────────────────────────
-app.post('/api/auth/resend-verification', async (c) => {
-  try {
-    const user = c.get('user')
-    if (!user) return jsonRes({ error: 'Authentication required' }, 401)
-
-    // Verify environment configuration before proceeding
-    if (!c.env.RESEND_API_KEY) {
-      return jsonRes({ error: 'Mail service configuration error (missing RESEND_API_KEY secret)' }, 500)
-    }
-    if (!c.env.EMAIL_FROM) {
-      return jsonRes({ error: 'Mail service configuration error (missing EMAIL_FROM variable)' }, 500)
-    }
-
-    const db  = c.env.DB
-    const now = Math.floor(Date.now() / 1000)
-
-    // Check if already verified
-    const dbUser = await db.prepare('SELECT email_verified_at FROM users WHERE id = ?')
-      .bind(user.id).first<{ email_verified_at: number | null }>()
-    if (dbUser?.email_verified_at) {
-      return jsonRes({ error: 'Email already verified' }, 400)
-    }
-
-    const email = user.email.toLowerCase()
-
-    // Delete existing verification tokens for this email
-    await db.prepare('DELETE FROM verifications WHERE identifier = ?').bind(email).run()
-
-    // Create new token
-    const token     = nanoid(48)
-    const expiresAt = now + 86400 // 24 hours
-
-    await db.prepare(
-      'INSERT INTO verifications (id, identifier, value, expires_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)'
-    ).bind(nanoid(), email, token, expiresAt, now, now).run()
-
-    // Send verification email via Resend
-    const origin = new URL(c.req.url).origin
-    const verifyUrl = `${origin}/verify-email?token=${token}`
-    c.executionCtx.waitUntil(
-      sendEmail(
-        c.env.RESEND_API_KEY,
-        c.env.EMAIL_FROM,
-        email,
-        'Verifica tu email en PrivatePaste',
-        verificationEmailHtml(verifyUrl)
-      )
-    )
-
-    return jsonRes({ success: true })
-  } catch (err) {
-    return safeError(c, 'Failed to resend verification', err)
-  }
-})
-
-// ─── GET /api/auth/test-email ────────────────────────────────────────────────
-app.get('/api/auth/test-email', async (c) => {
-  const to = c.req.query('to')
-  if (!to) return c.text('Missing "to" query parameter', 400)
-
-  try {
-    const res = await fetch('https://api.resend.com/emails', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${c.env.RESEND_API_KEY}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        from: c.env.EMAIL_FROM || 'onboarding@resend.dev',
-        to: [to],
-        subject: 'PrivatePaste Test Email',
-        html: '<p>Este es un email de prueba para verificar tu integracion con Resend.</p>',
-      }),
-    })
-
-    const status = res.status
-    const text = await res.text()
-
-    return c.json({
-      success: res.ok,
-      status,
-      response: text,
-      config: {
-        from: c.env.EMAIL_FROM || 'onboarding@resend.dev',
-        to,
-        hasApiKey: !!c.env.RESEND_API_KEY,
-        apiKeyLength: c.env.RESEND_API_KEY?.length ?? 0,
-      }
-    })
-  } catch (err: any) {
-    return c.json({
-      success: false,
-      error: err.message,
-      stack: err.stack,
-    }, 500)
-  }
 })
 
 // ─── GET /api/me ──────────────────────────────────────────────────────────────

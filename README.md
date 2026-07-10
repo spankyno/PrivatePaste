@@ -63,14 +63,6 @@ Añadir Secret: AUTH_SECRET = string aleatorio 32+ chars
 3. Copiar el **Secret Key** → `npx wrangler secret put TURNSTILE_SECRET_KEY`
    (nunca en wrangler.toml, ver comentario en ese archivo)
 
-### Paso 8c — Resend (verificación de email)
-1. Crear cuenta en [resend.com](https://resend.com) (tiene plan gratuito)
-2. Verificar tu dominio en Resend (Domains → Add Domain, añadir los registros DNS que pida)
-   — sin dominio verificado, Resend solo deja enviar a la dirección con la que te registraste
-3. Editar `EMAIL_FROM` en `wrangler.toml` con una dirección de ese dominio, p. ej. `PrivatePaste <verify@tudominio.com>`
-4. Crear una API Key en Resend → `npx wrangler secret put RESEND_API_KEY`
-   (nunca en wrangler.toml)
-
 ### Paso 9 — Primer deploy automático
 Push a main → GitHub Actions → pestaña Actions para ver el progreso
 URL resultante: https://privatepaste.TU_USUARIO.workers.dev
