@@ -9,8 +9,13 @@
 -- La tabla `verifications` no se elimina: es el mismo vestigio del scaffold
 -- inicial que ya existía antes de 0002 (sin uso), se deja tal cual por si
 -- se reutiliza en el futuro (p. ej. reseteo de contraseña).
+--
+-- Nota: no se hace DROP COLUMN de `users.email_verified_at`. SQLite no
+-- soporta "DROP COLUMN IF EXISTS", y en algunos entornos la migración 0002
+-- nunca llegó a aplicarse (la columna no existe ahí), lo que rompería este
+-- ALTER TABLE. Ningún código de la app lee ni escribe ya esa columna en los
+-- entornos donde sí existe, así que dejarla es inofensivo — solo un campo
+-- NULL sin usar.
 
 DROP INDEX IF EXISTS idx_verifications_identifier;
 DROP INDEX IF EXISTS idx_verifications_value;
-
-ALTER TABLE users DROP COLUMN email_verified_at;
