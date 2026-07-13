@@ -2,13 +2,15 @@
  * EditPaste page — edición completa de un paste existente.
  * Solo accesible para el propietario del paste.
  */
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
 import ReactCodeMirror from '@uiw/react-codemirror'
+import { EditorView } from '@codemirror/view'
 import { oneDark } from '@codemirror/theme-one-dark'
-import { Loader2, Save, X, ArrowLeft } from 'lucide-react'
+import { Loader2, Save, X, ArrowLeft, WrapText } from 'lucide-react'
 import { useAuth } from '@/hooks/useAuth'
 import { useDarkMode } from '@/hooks/useDarkMode'
+import { useLineWrap } from '@/hooks/useLineWrap'
 import { api, type Paste, ApiError } from '@/lib/api'
 import { LANGUAGES, getLanguage } from '@/lib/languages'
 import { TIER_LIMITS, EXPIRY_OPTIONS } from '@/lib/tiers'
@@ -20,6 +22,7 @@ export function EditPastePage() {
   const { id }          = useParams<{ id: string }>()
   const { user, tier }  = useAuth()
   const { dark }        = useDarkMode()
+  const { wrap, toggle: toggleWrap } = useLineWrap()
   const navigate        = useNavigate()
   const limits          = TIER_LIMITS[tier]
 
@@ -115,6 +118,14 @@ export function EditPastePage() {
   const bytesUsed  = new TextEncoder().encode(content).length
   const overLimit  = bytesUsed > limits.maxPasteSizeBytes
 
+  // Extensiones de CodeMirror: la del lenguaje + wrap condicional. Se
+  // calcula siempre (antes de los `return` condicionales de loading/error)
+  // porque es un hook y debe llamarse en el mismo orden en cada render.
+  const editorExtensions = useMemo(
+    () => [...langExt, ...(wrap ? [EditorView.lineWrapping] : [])],
+    [langExt, wrap]
+  )
+
   const availableExpiry = EXPIRY_OPTIONS.filter(opt => {
     if (opt.value === 'never') return limits.canSetNeverExpire
     if (tier === 'anon')       return opt.days <= 3
@@ -180,6 +191,23 @@ export function EditPastePage() {
             <option key={l.id} value={l.id}>{l.label}</option>
           ))}
         </select>
+
+        {/* Wrap toggle */}
+        <button
+          type="button"
+          onClick={toggleWrap}
+          title={wrap ? 'Ajuste de línea activado — clic para desactivar (scroll horizontal)' : 'Ajuste de línea desactivado — clic para activar'}
+          aria-pressed={wrap}
+          className={clsx(
+            'flex items-center gap-1.5 px-3 py-2 rounded-lg border text-sm transition-colors shrink-0',
+            wrap
+              ? 'bg-brand-600 dark:bg-brand-500 text-white border-transparent'
+              : 'bg-[var(--bg)] text-[var(--text-muted)] border-[var(--border)] hover:bg-[var(--bg-secondary)]',
+          )}
+        >
+          <WrapText className="w-4 h-4" />
+          <span className="hidden sm:inline">Wrap</span>
+        </button>
       </div>
 
       {/* Editor */}
@@ -190,7 +218,7 @@ export function EditPastePage() {
         <ReactCodeMirror
           value={content}
           onChange={setContent}
-          extensions={langExt}
+          extensions={editorExtensions}
           theme={dark ? oneDark : undefined}
           placeholder="Paste content…"
           style={{ flex: 1, fontSize: 14 }}
