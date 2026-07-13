@@ -2,13 +2,15 @@
  * ViewPaste page — displays a paste with syntax highlighting.
  * Handles: public, private (owner only), password-protected (unlock modal).
  */
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useMemo } from 'react'
 import { useParams, Link, useNavigate } from 'react-router-dom'
 import ReactCodeMirror from '@uiw/react-codemirror'
+import { EditorView } from '@codemirror/view'
 import { oneDark } from '@codemirror/theme-one-dark'
-import { Copy, Check, ExternalLink, Trash2, Clock, Eye, Lock, Globe, EyeOff, Loader2, Pencil, Save, X } from 'lucide-react'
+import { Copy, Check, ExternalLink, Trash2, Clock, Eye, Lock, Globe, EyeOff, Loader2, Pencil, Save, X, WrapText } from 'lucide-react'
 import { useDarkMode } from '@/hooks/useDarkMode'
 import { useAuth } from '@/hooks/useAuth'
+import { useLineWrap } from '@/hooks/useLineWrap'
 import { useDocumentHead } from '@/hooks/useDocumentHead'
 import { api, type Paste, ApiError } from '@/lib/api'
 import { getLanguage } from '@/lib/languages'
@@ -18,6 +20,7 @@ import clsx from 'clsx'
 export function ViewPastePage() {
   const { id }         = useParams<{ id: string }>()
   const { dark }       = useDarkMode()
+  const { wrap, toggle: toggleWrap } = useLineWrap()
   const { user }       = useAuth()
   const navigate       = useNavigate()
 
@@ -138,6 +141,15 @@ export function ViewPastePage() {
     }
   }
 
+  // Extensiones de CodeMirror: la del lenguaje + wrap condicional. Se
+  // calcula siempre (antes de los `return` condicionales de loading/error/
+  // locked) porque es un hook y debe llamarse en el mismo orden en cada
+  // render.
+  const editorExtensions = useMemo(
+    () => [...langExt, ...(wrap ? [EditorView.lineWrapping] : [])],
+    [langExt, wrap]
+  )
+
   if (loading) return (
     <div className="flex items-center justify-center min-h-[50vh]">
       <Loader2 className="w-6 h-6 animate-spin text-[var(--text-muted)]" />
@@ -233,6 +245,21 @@ export function ViewPastePage() {
 
         {/* Action buttons */}
         <div className="flex items-center gap-2 flex-shrink-0">
+          {/* El wrap toggle está siempre visible, edites o no — afecta al
+              mismo editor de CodeMirror en ambos modos. */}
+          <button
+            onClick={toggleWrap}
+            title={wrap ? 'Ajuste de línea activado — clic para desactivar (scroll horizontal)' : 'Ajuste de línea desactivado — clic para activar'}
+            aria-pressed={wrap}
+            className={clsx(
+              'text-xs py-1.5 px-3',
+              wrap ? 'btn-primary' : 'btn-secondary',
+            )}
+          >
+            <WrapText className="w-3.5 h-3.5" />
+            Wrap
+          </button>
+
           {editing ? (
             <>
               <button
@@ -304,7 +331,7 @@ export function ViewPastePage() {
       <div className="rounded-xl border border-[var(--border)] overflow-hidden">
         <ReactCodeMirror
           value={editing ? editContent : paste.content}
-          extensions={langExt}
+          extensions={editorExtensions}
           theme={dark ? oneDark : undefined}
           editable={editing}
           onChange={(value) => { if (editing) setEditContent(value) }}
