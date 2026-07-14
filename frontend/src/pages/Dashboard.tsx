@@ -6,11 +6,12 @@ import { Link, Navigate } from 'react-router-dom'
 import {
   Search, FileText, Trash2, ExternalLink, Eye, Clock, Lock, Globe, EyeOff,
   Plus, Loader2, Copy, Check, Folder as FolderIcon, FolderPlus, Pencil,
-  X, FolderInput, GripVertical, Archive, ChevronLeft, ChevronRight,
+  X, FolderInput, GripVertical, Archive, ChevronLeft, ChevronRight, Download,
 } from 'lucide-react'
 import { useAuth } from '@/hooks/useAuth'
 import { useDocumentHead } from '@/hooks/useDocumentHead'
 import { api, type Paste, type Folder as FolderType } from '@/lib/api'
+import { exportAllPastesAsZip } from '@/lib/exportPastes'
 import { formatDistanceToNow, fromUnixTime, format } from 'date-fns'
 import clsx from 'clsx'
 
@@ -29,6 +30,8 @@ export function DashboardPage() {
   const [loading,  setLoading]  = useState(true)
   const [deleting, setDeleting] = useState<string | null>(null)
   const [copiedId, setCopiedId] = useState<string | null>(null)
+  const [exporting, setExporting] = useState(false)
+  const [exportError, setExportError] = useState<string | null>(null)
 
   const [showFolderModal, setShowFolderModal] = useState(false)
   const [editingFolder,   setEditingFolder]   = useState<FolderType | null>(null)
@@ -70,6 +73,19 @@ export function DashboardPage() {
     document.addEventListener('mousedown', onClick)
     return () => document.removeEventListener('mousedown', onClick)
   }, [])
+
+  const handleExportAll = async () => {
+    setExporting(true)
+    setExportError(null)
+    try {
+      const { count } = await exportAllPastesAsZip()
+      if (count === 0) setExportError('No tienes pastes que exportar.')
+    } catch (err: any) {
+      setExportError(err.message ?? 'No se pudo generar el zip. Inténtalo de nuevo.')
+    } finally {
+      setExporting(false)
+    }
+  }
 
   const handleDelete = async (id: string, e: React.MouseEvent) => {
     e.preventDefault()
@@ -225,11 +241,28 @@ export function DashboardPage() {
             {canUseFolders && <span className="hidden sm:inline"> · drag a paste onto a folder to move it</span>}
           </p>
         </div>
-        <Link to="/new" className="btn-primary text-sm">
-          <Plus className="w-4 h-4" />
-          New paste
-        </Link>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={handleExportAll}
+            disabled={exporting}
+            title="Descarga un .zip con todos tus pastes (activos y archivados)"
+            className="btn-secondary text-sm"
+          >
+            {exporting
+              ? <Loader2 className="w-4 h-4 animate-spin" />
+              : <Download className="w-4 h-4" />}
+            {exporting ? 'Exportando…' : 'Export all (.zip)'}
+          </button>
+          <Link to="/new" className="btn-primary text-sm">
+            <Plus className="w-4 h-4" />
+            New paste
+          </Link>
+        </div>
       </div>
+
+      {exportError && (
+        <p className="text-red-500 text-sm -mt-2">{exportError}</p>
+      )}
 
       <div className="flex gap-4 flex-col sm:flex-row">
         {/* Sidebar: Folders */}
