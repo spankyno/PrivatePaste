@@ -137,6 +137,10 @@ router.get('/', requireAuth, async (c) => {
       ? '(p.is_archived = 1 OR (p.expires_at IS NOT NULL AND p.expires_at <= ?))'
       : '(p.is_archived = 0 AND (p.expires_at IS NULL OR p.expires_at > ?))'
 
+    // Se pide una fila de más (limit + 1) para saber si hay más resultados
+    // sin necesidad de un segundo COUNT(*); se recorta a `limit` después.
+    const fetchLimit = limit + 1
+
     let rows: any[]
     if (q) {
       const fts = await c.env.DB.prepare(
@@ -144,22 +148,25 @@ router.get('/', requireAuth, async (c) => {
          INNER JOIN pastes_fts f ON f.id = p.id
          WHERE f.pastes_fts MATCH ? AND p.user_id = ? AND ${statusFilter}
          ORDER BY p.created_at DESC LIMIT ? OFFSET ?`
-      ).bind(q, userId, now, limit, offset).all()
+      ).bind(q, userId, now, fetchLimit, offset).all()
       rows = fts.results
     } else {
       const result = folderId
         ? await c.env.DB.prepare(
             `SELECT p.* FROM pastes p WHERE p.user_id = ? AND p.folder_id = ? AND ${statusFilter}
              ORDER BY p.created_at DESC LIMIT ? OFFSET ?`
-          ).bind(userId, folderId, now, limit, offset).all()
+          ).bind(userId, folderId, now, fetchLimit, offset).all()
         : await c.env.DB.prepare(
             `SELECT p.* FROM pastes p WHERE p.user_id = ? AND ${statusFilter}
              ORDER BY p.created_at DESC LIMIT ? OFFSET ?`
-          ).bind(userId, now, limit, offset).all()
+          ).bind(userId, now, fetchLimit, offset).all()
       rows = result.results
     }
 
-    return json({ pastes: rows.map(toCamelPaste), page, limit })
+    const hasMore = rows.length > limit
+    if (hasMore) rows = rows.slice(0, limit)
+
+    return json({ pastes: rows.map(toCamelPaste), page, limit, hasMore })
   } catch (err) {
     return errorResponse(c, 'Failed to list pastes', err)
   }
